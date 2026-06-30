@@ -1,4 +1,4 @@
-// @jfs/news-kit v0.1.0 — single-file bundle of all modules.
+// @jfs/news-kit v0.2.0 — single-file bundle of all modules.
 // Shared, dependency-free news primitives. Pure ESM, no runtime deps.
 // (Concatenated from the per-module sources; internal imports removed.)
 
@@ -726,6 +726,20 @@ export function isSafeContentUrl(url) {
   return !/^[a-z][a-z0-9+.-]*:/i.test(trimmed);
 }
 
+/** True if every candidate URL in a `srcset` value is safe. `isSafe` is the
+ *  per-URL validator (defaults to isSafeContentUrl); each candidate is the URL
+ *  token before its optional width/density descriptor. Pure — Node-testable. */
+export function isSafeSrcset(value, isSafe = isSafeContentUrl) {
+  const ok = (u) => { const v = isSafe(u); return v === true || (typeof v === 'string' && !!v); };
+  return String(value == null ? '' : value)
+    .split(',')
+    .map((part) => part.trim().split(/\s+/)[0])
+    .filter(Boolean)
+    .every(ok);
+}
+
+const URL_ATTRS = new Set(['href', 'src', 'srcset']);
+
 /**
  * Rebuild `html` into a safe DocumentFragment using the allowlist. Browser-only.
  * @param {string} html
@@ -734,7 +748,9 @@ export function isSafeContentUrl(url) {
  *   allowed?: Set<string>|string[],
  *   blocked?: Set<string>|string[],
  *   attrs?: Record<string,string[]>,
+ *   globalAttrs?: Set<string>|string[],  // non-URL attrs allowed on any element (e.g. dir, lang)
  *   safeUrl?: (url:string)=>(string|null|boolean),
+ *   lazyImages?: boolean,
  * }} [options]
  * @returns {DocumentFragment}
  */
@@ -747,7 +763,18 @@ export function sanitizeHtml(html, options = {}) {
     allowed: toSet(options.allowed, DEFAULT_ALLOWED),
     blocked: toSet(options.blocked, DEFAULT_BLOCKED),
     attrs: options.attrs || DEFAULT_ATTRS_BY_TAG,
+    // Attribute names (lowercase, NOT upper-cased) permitted on every allowed
+    // element. URL-bearing names are ignored here — they must be per-tag so
+    // they go through validation.
+    globalAttrs: options.globalAttrs instanceof Set
+      ? options.globalAttrs
+      : new Set(options.globalAttrs || []),
     lazyImages: options.lazyImages === true,
+    // Default true (v0.1.0 behavior): give a kept <img> an alt='' and unwrap an
+    // <img> that has no safe src. An article reader that wants to keep src-less
+    // images / authored alts can switch these off.
+    defaultAlt: options.defaultAlt !== false,
+    requireImageSrc: options.requireImageSrc !== false,
     // A validator may return a normalized href (string) or a boolean; normalize
     // both into "use this string or skip".
     urlOf: (raw) => {
@@ -784,7 +811,7 @@ function appendCleanChildren(parent, target, doc, cfg) {
 }
 
 function buildAllowed(node, tag, doc, cfg) {
-  if (tag === 'IMG') {
+  if (tag === 'IMG' && cfg.requireImageSrc) {
     const src = cfg.urlOf(node.getAttribute('src'));
     if (!src) return null; // signal caller to unwrap (keep any children)
   }
@@ -798,9 +825,18 @@ function buildAllowed(node, tag, doc, cfg) {
       if (!safe) continue;
       out.setAttribute(name, safe);
       if (name === 'href') hasHref = true;
+    } else if (name === 'srcset') {
+      // Keep the original value only if every candidate URL is safe.
+      if (isSafeSrcset(val, (u) => cfg.urlOf(u) != null)) out.setAttribute(name, val);
     } else {
       out.setAttribute(name, val);
     }
+  }
+  // Global (non-URL) attributes permitted on any element.
+  for (const name of cfg.globalAttrs) {
+    if (URL_ATTRS.has(name) || out.hasAttribute(name)) continue;
+    const val = node.getAttribute(name);
+    if (val != null) out.setAttribute(name, val);
   }
   // Only decorate real links — a hrefless <a> isn't a navigation target.
   if (tag === 'A' && hasHref) {
@@ -808,9 +844,9 @@ function buildAllowed(node, tag, doc, cfg) {
     out.setAttribute('rel', 'noopener noreferrer');
   }
   if (tag === 'IMG') {
-    // Always give a kept image an alt (default '' = decorative) when alt is
-    // allowed, rather than leaving it unannounced to screen readers.
-    if ((cfg.attrs.IMG || []).includes('alt') && !out.hasAttribute('alt')) {
+    // Give a kept image an alt (default '' = decorative) when alt is allowed,
+    // rather than leaving it unannounced to screen readers.
+    if (cfg.defaultAlt && (cfg.attrs.IMG || []).includes('alt') && !out.hasAttribute('alt')) {
       out.setAttribute('alt', '');
     }
     if (cfg.lazyImages) out.setAttribute('loading', 'lazy');
