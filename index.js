@@ -1,4 +1,4 @@
-// @jfs/news-kit v0.2.0 — single-file bundle of all modules.
+// @jfs/news-kit v0.3.0 — single-file bundle of all modules.
 // Shared, dependency-free news primitives. Pure ESM, no runtime deps.
 // (Concatenated from the per-module sources; internal imports removed.)
 
@@ -178,6 +178,12 @@ export function signalPriority(signal, table = DEFAULT_PRIORITY) {
 const MAX_TITLE = 300;
 const MAX_SUMMARY = 240;
 const MAX_CONTENT = 200_000;
+// Hard bound on the raw feed body before any parsing — a hostile feed (e.g. many
+// unclosed <item> tags) could otherwise drive the regex scan quadratic. 4 MB is
+// far above any real feed.
+const MAX_FEED_BYTES = 4_000_000;
+// Cap items the regex path will extract, independent of the caller's `max`.
+const HARD_ITEM_CAP = 1000;
 
 /**
  * @typedef {Object} NewsItem
@@ -199,6 +205,7 @@ const MAX_CONTENT = 200_000;
  */
 export function parseFeed(xml, opts = {}) {
   if (!xml || typeof xml !== 'string') return [];
+  if (xml.length > MAX_FEED_BYTES) xml = xml.slice(0, MAX_FEED_BYTES);
   const hasDom = typeof globalThis.DOMParser === 'function';
   const raw = hasDom ? parseWithDom(xml) : parseWithRegex(xml);
   const source = opts.source || '';
@@ -298,10 +305,17 @@ function parseWithDom(xml) {
 
 function parseWithRegex(xml) {
   const out = [];
-  const blockRe = /<(item|entry)\b[\s\S]*?<\/\1>/gi;
+  // Find each opening <item>/<entry>, then locate its close with indexOf from
+  // that point. A previous lazy regex (/<(item|entry)\b[\s\S]*?<\/\1>/g) rescanned
+  // to EOF from every unmatched open tag → O(n^2) on a feed with unclosed items.
+  // This is a single linear pass.
+  const openRe = /<(item|entry)\b[^>]*>/gi;
   let m;
-  while ((m = blockRe.exec(xml))) {
-    const block = m[0];
+  while ((m = openRe.exec(xml)) && out.length < HARD_ITEM_CAP) {
+    const tag = m[1].toLowerCase();
+    const closeIdx = xml.indexOf(`</${tag}`, openRe.lastIndex);
+    if (closeIdx === -1) break; // no closing tag → stop rather than rescan
+    const block = xml.slice(m.index, closeIdx);
     out.push({
       title: decodedText(block, ['title']),
       url: regexLink(block),
@@ -310,6 +324,7 @@ function parseWithRegex(xml) {
       // Article body is HTML — unwrap CDATA but do NOT entity-decode it.
       content: decodeCdata(rawTag(block, ['content:encoded'])),
     });
+    openRe.lastIndex = closeIdx; // continue scanning after this block
   }
   return out;
 }
@@ -390,6 +405,11 @@ function escapeRe(s) {
 // `published_at` (ISO string) and the optional `signal`/`company`.
 
 
+// Single-linkage clustering is O(n^2) in the worst case (all-unique titles), so
+// cap the input — a hostile/huge feed merge can't hang the event loop. 2000 news
+// items is already far more than any UI renders.
+const MAX_DEDUPE_ITEMS = 2000;
+
 const TITLE_STOPWORDS = new Set([
   'a', 'an', 'the', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'for', 'with',
   'at', 'by', 'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'it',
@@ -453,7 +473,8 @@ export function earliestDate(a, b) {
  * @returns {Array<Object>}
  */
 export function dedupeItems(items) {
-  const ordered = [...items].sort((a, b) => {
+  const bounded = items.length > MAX_DEDUPE_ITEMS ? items.slice(0, MAX_DEDUPE_ITEMS) : items;
+  const ordered = [...bounded].sort((a, b) => {
     const pa = signalPriority(a.signal);
     const pb = signalPriority(b.signal);
     if (pa !== pb) return pa - pb;
@@ -717,7 +738,10 @@ const DEFAULT_ATTRS_BY_TAG = {
  *  consumer only wants absolute links. */
 export function isSafeContentUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  const trimmed = url.trim();
+  // Strip ALL C0 controls + DEL anywhere (browsers drop tab/newline/NUL from a
+  // URL before resolving its scheme, so `java\tscript:` and `javascript:`
+  // would otherwise slip past the scheme test), then trim surrounding spaces.
+  const trimmed = url.replace(/[\u0000-\u001F\u007F]/g, '').trim();
   if (/^(javascript|data|vbscript|file):/i.test(trimmed)) return false;
   if (/^https?:\/\//i.test(trimmed)) return true;
   if (/^\/\//.test(trimmed)) return true; // protocol-relative
@@ -726,12 +750,19 @@ export function isSafeContentUrl(url) {
   return !/^[a-z][a-z0-9+.-]*:/i.test(trimmed);
 }
 
-/** True if every candidate URL in a `srcset` value is safe. `isSafe` is the
- *  per-URL validator (defaults to isSafeContentUrl); each candidate is the URL
- *  token before its optional width/density descriptor. Pure — Node-testable. */
+const DANGEROUS_SCHEME_RE = /(javascript|data|vbscript|file|blob):/;
+
+/** True if a `srcset` value is safe. `isSafe` is the per-URL validator (defaults
+ *  to isSafeContentUrl). Because naive comma-splitting can diverge from the
+ *  browser's candidate parsing (a comma inside a URL over-splits and can hide a
+ *  dangerous scheme in a fragment), this ALSO rejects the whole value if any
+ *  dangerous scheme appears anywhere (control chars stripped first). Pure. */
 export function isSafeSrcset(value, isSafe = isSafeContentUrl) {
+  const raw = String(value == null ? '' : value);
+  const flat = raw.replace(/[\u0000-\u0020\u007F]+/g, '').toLowerCase();
+  if (DANGEROUS_SCHEME_RE.test(flat)) return false;
   const ok = (u) => { const v = isSafe(u); return v === true || (typeof v === 'string' && !!v); };
-  return String(value == null ? '' : value)
+  return raw
     .split(',')
     .map((part) => part.trim().split(/\s+/)[0])
     .filter(Boolean)
@@ -739,6 +770,8 @@ export function isSafeSrcset(value, isSafe = isSafeContentUrl) {
 }
 
 const URL_ATTRS = new Set(['href', 'src', 'srcset']);
+const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+const MAX_DEPTH = 256;
 
 /**
  * Rebuild `html` into a safe DocumentFragment using the allowlist. Browser-only.
@@ -786,31 +819,38 @@ export function sanitizeHtml(html, options = {}) {
   };
   const parsed = new globalThis.DOMParser().parseFromString(String(html || ''), 'text/html');
   const frag = doc.createDocumentFragment();
-  appendCleanChildren(parsed.body, frag, doc, cfg);
+  appendCleanChildren(parsed.body, frag, doc, cfg, 0);
   return frag;
 }
 
-function appendCleanChildren(parent, target, doc, cfg) {
+function appendCleanChildren(parent, target, doc, cfg, depth) {
+  // Bound recursion so deeply-nested hostile HTML can't overflow the stack.
+  if (depth > MAX_DEPTH) return;
   for (const node of Array.from(parent.childNodes)) {
     if (node.nodeType === 3) {
       target.appendChild(doc.createTextNode(node.nodeValue));
       continue;
     }
     if (node.nodeType !== 1) continue; // drop comments / processing instructions
-    const tag = node.tagName;
+    // Foreign-content (SVG/MathML) elements report a lowercase tagName, so the
+    // uppercase BLOCKED/ALLOWED sets miss them — and unwrapping them into an
+    // HTML sink would resurrect their (HTML-breakout) children. Drop any
+    // non-XHTML element entirely, with its subtree.
+    if (node.namespaceURI && node.namespaceURI !== XHTML_NS) continue;
+    const tag = (node.localName || node.tagName).toUpperCase();
     if (cfg.blocked.has(tag)) continue; // remove element AND its subtree
     if (!cfg.allowed.has(tag)) {
       // Unknown tag: unwrap — keep its cleaned children, drop the wrapper.
-      appendCleanChildren(node, target, doc, cfg);
+      appendCleanChildren(node, target, doc, cfg, depth + 1);
       continue;
     }
-    const el = buildAllowed(node, tag, doc, cfg);
+    const el = buildAllowed(node, tag, doc, cfg, depth);
     if (el) target.appendChild(el);
-    else appendCleanChildren(node, target, doc, cfg); // e.g. <img> with unsafe src → unwrap
+    else appendCleanChildren(node, target, doc, cfg, depth + 1); // e.g. <img> w/ unsafe src → unwrap
   }
 }
 
-function buildAllowed(node, tag, doc, cfg) {
+function buildAllowed(node, tag, doc, cfg, depth) {
   if (tag === 'IMG' && cfg.requireImageSrc) {
     const src = cfg.urlOf(node.getAttribute('src'));
     if (!src) return null; // signal caller to unwrap (keep any children)
@@ -832,9 +872,10 @@ function buildAllowed(node, tag, doc, cfg) {
       out.setAttribute(name, val);
     }
   }
-  // Global (non-URL) attributes permitted on any element.
+  // Global (non-URL) attributes permitted on any element. Reject URL-bearing and
+  // event-handler names defensively, even if a consumer mistakenly allowlists one.
   for (const name of cfg.globalAttrs) {
-    if (URL_ATTRS.has(name) || out.hasAttribute(name)) continue;
+    if (URL_ATTRS.has(name) || /^on/i.test(name) || out.hasAttribute(name)) continue;
     const val = node.getAttribute(name);
     if (val != null) out.setAttribute(name, val);
   }
@@ -851,7 +892,7 @@ function buildAllowed(node, tag, doc, cfg) {
     }
     if (cfg.lazyImages) out.setAttribute('loading', 'lazy');
   }
-  appendCleanChildren(node, out, doc, cfg);
+  appendCleanChildren(node, out, doc, cfg, depth + 1);
   return out;
 }
 

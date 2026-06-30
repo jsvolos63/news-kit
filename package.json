@@ -1,6 +1,6 @@
 {
   "name": "@jfs/news-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shared, dependency-free news primitives (RSS parsing, dedup, classification, escaping, CORS proxy race, relative time, HTML sanitizing) extracted from the JFS family of apps.",
   "type": "module",
   "license": "MIT",
