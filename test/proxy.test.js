@@ -1,0 +1,60 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { proxyRace } from '../index.js';
+
+const FEED = '<rss><channel><item><title>x</title></item></channel></rss>';
+
+function mockFetch(map) {
+  // map: proxiedUrl substring -> { ok, body } | () => Promise
+  return async (url) => {
+    for (const [needle, resp] of Object.entries(map)) {
+      if (url.includes(needle)) {
+        const r = typeof resp === 'function' ? await resp() : resp;
+        return { ok: r.ok !== false, status: r.status || 200, text: async () => r.body || '' };
+      }
+    }
+    throw new Error(`no mock for ${url}`);
+  };
+}
+
+test('returns the first proxy that yields a usable feed', async () => {
+  const fetchImpl = mockFetch({
+    codetabs: { body: FEED },
+    allorigins: { body: FEED },
+    'corsproxy.io': { body: FEED },
+  });
+  const { text, via } = await proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 500 });
+  assert.equal(text, FEED);
+  assert.match(via, /^proxy:\d$/);
+});
+
+test('skips empty bodies and falls through to a populated proxy', async () => {
+  const fetchImpl = mockFetch({
+    codetabs: { body: '<rss></rss>' }, // 0 items -> rejected
+    allorigins: { body: '<rss></rss>' },
+    'corsproxy.io': { body: FEED },
+  });
+  const { text } = await proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 500 });
+  assert.equal(text, FEED);
+});
+
+test('rejects when every transport fails', async () => {
+  const fetchImpl = mockFetch({
+    codetabs: { ok: false, status: 502 },
+    allorigins: { ok: false, status: 500 },
+    'corsproxy.io': { body: '' },
+  });
+  await assert.rejects(
+    proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 500 }),
+  );
+});
+
+test('uses a custom proxy list', async () => {
+  const fetchImpl = mockFetch({ myproxy: { body: FEED } });
+  const { via } = await proxyRace('https://feed.example/rss', {
+    proxies: [(u) => `https://myproxy/?u=${encodeURIComponent(u)}`],
+    fetchImpl,
+    timeoutMs: 500,
+  });
+  assert.equal(via, 'proxy:0');
+});
