@@ -28,5 +28,11 @@
   },
   "files": [
     "index.js"
-  ]
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^29.0.0"
+  }
 }
