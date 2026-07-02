@@ -1,4 +1,4 @@
-// @jfs/news-kit v0.3.0 — single-file bundle of all modules.
+// @jfs/news-kit — single-file bundle of all modules.
 // Shared, dependency-free news primitives. Pure ESM, no runtime deps.
 // (Concatenated from the per-module sources; internal imports removed.)
 
