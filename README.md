@@ -20,9 +20,14 @@ JFS-Sports). Pure ESM, zero runtime dependencies, single-file bundle
 
 ## Using it
 
-Consumers pin the package by **commit SHA** and vendor the file they need with
-a generated wrapper (see `scripts/vendor-news-kit.mjs` in BearsMockDraft and
-market-monitor), with `vendor:check` in CI failing the build on drift:
+Consumers pin the package by **commit SHA** and vendor it with the kit's own
+CLI (`jfs-news-kit-vendor`), with the same invocation plus `--check` in CI
+failing the build on drift. An ESM consumer copies the module verbatim
+(`--format esm --out js/vendor/news-kit/index.js`); a classic-script consumer
+takes an IIFE global, optionally narrowed to just what it uses, e.g.
+BearsMockDraft's reader sanitizer
+(`--format global --name NewsKitSanitize --pick sanitizeHtml,isSafeContentUrl
+--out js/vendor/news-kit/sanitize-html.js`):
 
 ```json
 "devDependencies": {
