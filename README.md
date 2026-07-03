@@ -56,6 +56,7 @@ exercised in CI.
 
 ## Versioning
 
-Bump `version` in `package.json` and the header comment in `index.js` together
-for every change to `index.js`, and tag the commit (`vX.Y.Z`). Consumers pin
+Bump `version` in `package.json` for every change to `index.js`, and tag the
+commit (`vX.Y.Z`). The `index.js` banner deliberately carries no version —
+vendored copies get `v${pkg.version}` stamped by the shared vendor CLI. Consumers pin
 SHAs, so nothing moves until they re-pin and run `npm run vendor:sync`.
