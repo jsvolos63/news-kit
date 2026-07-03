@@ -66,12 +66,21 @@ function safeFromCodePoint(cp) {
 //
 // JFS-Sports is the only one that correctly splits the two URL use-cases, so
 // that distinction is preserved here:
-//   - safeUrl()      -> normalized href string, NOT HTML-escaped. Use for the
-//                       DOM APIs (el.setAttribute('href', ...), el.href, el.src)
-//                       where the browser stores the value verbatim; escaping
-//                       would double-encode `&`.
-//   - safeUrlAttr()  -> HTML-escaped href, ready to drop into an innerHTML
-//                       template literal: `<a href="${safeUrlAttr(u)}">`.
+//   - safeContentUrl()     -> normalized href string, NOT HTML-escaped. Use for
+//                             the DOM APIs (el.setAttribute('href', ...),
+//                             el.href, el.src) where the browser stores the
+//                             value verbatim; escaping would double-encode `&`.
+//   - safeContentUrlAttr() -> HTML-escaped href, ready to drop into an
+//                             innerHTML template literal:
+//                             `<a href="${safeContentUrlAttr(u)}">`.
+//
+// FAMILY NAMING RULE: the generic DOM-safety names (escapeHtml, safeUrl,
+// sanitizeUrl, sanitizeHref, sanitizeHtml) belong to @jfs/dom-kit, with
+// dom-kit's permissive contracts (e.g. its safeUrl returns '#' on reject and
+// allows mailto:). news-kit's guards are strict feed-content validators, so
+// they live under content-scoped names (safeContentUrl, safeContentUrlAttr,
+// isSafeContentUrl, sanitizeHtmlToFragment) — exporting the same name with a
+// different contract from two kits is deliberately avoided.
 
 /** Escape the five HTML-significant characters. Safe for text nodes and for
  *  values placed inside either single- or double-quoted attributes. */
@@ -87,7 +96,7 @@ export function escHtml(s) {
 /** Validate a URL and return its normalized absolute href, or null when it is
  *  not a syntactically valid http(s) URL. Blocks javascript:, data:, vbscript:,
  *  mailto:, relative paths, credentials and non-standard schemes. */
-export function safeUrl(u) {
+export function safeContentUrl(u) {
   if (!u || typeof u !== 'string') return null;
   let parsed;
   try {
@@ -99,17 +108,13 @@ export function safeUrl(u) {
   return parsed.href;
 }
 
-/** Same validation as safeUrl(), but HTML-escaped for `innerHTML` interpolation.
- *  Returns '' (not null) so it slots cleanly into a template literal. */
-export function safeUrlAttr(u) {
-  const href = safeUrl(u);
+/** Same validation as safeContentUrl(), but HTML-escaped for `innerHTML`
+ *  interpolation. Returns '' (not null) so it slots cleanly into a template
+ *  literal. */
+export function safeContentUrlAttr(u) {
+  const href = safeContentUrl(u);
   return href ? escHtml(href) : '';
 }
-
-// Names used by the existing repos, kept as aliases to ease migration.
-export const escapeHtml = escHtml;
-export const sanitizeHref = safeUrl;
-export const sanitizeUrl = safeUrlAttr;
 
 // ===================== classify =====================
 // Keyword classification into signal buckets.
@@ -707,10 +712,15 @@ function toMs(ts) {
 //     children are kept, so text inside <section>/<article>/<table>/<div>
 //     survives instead of vanishing.
 //
-// The full rebuild needs a DOM, so `sanitizeHtml()` is browser-only. The
-// security-critical URL decision is factored out as the pure, Node-testable
-// `isSafeContentUrl()`, and the URL policy is injectable so a stricter consumer
-// (e.g. a reader that only wants absolute links) can pass its own validator.
+// The full rebuild needs a DOM, so `sanitizeHtmlToFragment()` is browser-only
+// (it throws without one — fail-closed by design). The security-critical URL
+// decision is factored out as the pure, Node-testable `isSafeContentUrl()`,
+// and the URL policy is injectable so a stricter consumer (e.g. a reader that
+// only wants absolute links) can pass its own validator.
+//
+// (Named sanitizeHtmlToFragment, not sanitizeHtml: the generic name belongs to
+// @jfs/dom-kit, whose sanitizeHtml returns a string — see the family naming
+// rule in the escape section above.)
 
 const DEFAULT_ALLOWED = new Set([
   'P', 'BR', 'HR', 'SPAN', 'DIV', 'B', 'STRONG', 'I', 'EM', 'U', 'A',
@@ -787,10 +797,10 @@ const MAX_DEPTH = 256;
  * }} [options]
  * @returns {DocumentFragment}
  */
-export function sanitizeHtml(html, options = {}) {
+export function sanitizeHtmlToFragment(html, options = {}) {
   const doc = options.doc || globalThis.document;
   if (!doc || typeof globalThis.DOMParser !== 'function') {
-    throw new Error('sanitizeHtml requires a DOM (browser).');
+    throw new Error('sanitizeHtmlToFragment requires a DOM (browser).');
   }
   const cfg = {
     allowed: toSet(options.allowed, DEFAULT_ALLOWED),
