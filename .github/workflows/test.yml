@@ -1,5 +1,5 @@
 # Runs the node:test suite on every push and PR. jsdom (devDependency) backs
-# the DOM-path tests (DOMParser feed parsing, the sanitizeHtml rebuild), so an
+# the DOM-path tests (DOMParser feed parsing, the sanitizeHtmlToFragment rebuild), so an
 # install step is required even though index.js itself has no dependencies.
 name: Test
 
