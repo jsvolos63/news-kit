@@ -553,17 +553,27 @@ export function mergeItems(prevItems, freshItems, opts = {}) {
 // proxy with an SSRF host allowlist (market-monitor's netlify/functions/
 // rss-proxy.js is the model). Pass it as `originProxy` and, once it's reliable,
 // shrink or drop `proxies`.
+//
+// For exactly that reason the public proxies are NOT a silent default: a
+// consumer must opt in by passing `proxies` (PUBLIC_CORS_PROXIES is exported
+// for that) and/or `originProxy`. Calling proxyRace with neither throws.
 
 
-/** Default public CORS proxies (the set hardcoded across Bears/JFS/Surf). */
-export const DEFAULT_PROXIES = [
+/** The public CORS proxies historically hardcoded across Bears/JFS/Surf.
+ *  OPT-IN ONLY — see the security note above. */
+export const PUBLIC_CORS_PROXIES = [
   (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
   (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
   (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
 ];
+// Back-compat alias for the old name (no consumer shipped against it yet, but
+// the vendored copies exposed it).
+export { PUBLIC_CORS_PROXIES as DEFAULT_PROXIES };
 
 /**
  * Fetch `targetUrl` through whichever proxy returns a usable feed first.
+ * At least one of `proxies` / `originProxy` is required — public CORS proxies
+ * are an explicit opt-in (pass PUBLIC_CORS_PROXIES), never a silent default.
  * @param {string} targetUrl
  * @param {{
  *   proxies?: Array<(u:string)=>string>,
@@ -578,7 +588,12 @@ export const DEFAULT_PROXIES = [
  * @throws when every transport fails or returns an empty/unusable body.
  */
 export async function proxyRace(targetUrl, opts = {}) {
-  const proxies = opts.proxies || DEFAULT_PROXIES;
+  const proxies = opts.proxies || [];
+  if (proxies.length === 0 && !opts.originProxy) {
+    throw new Error(
+      'proxyRace: pass `proxies` (e.g. PUBLIC_CORS_PROXIES — an explicit privacy opt-in) and/or an own-origin `originProxy`',
+    );
+  }
   const timeoutMs = opts.timeoutMs ?? 8000;
   const minItems = opts.minItems ?? 1;
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
