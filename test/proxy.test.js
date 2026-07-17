@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { proxyRace } from '../index.js';
+import { proxyRace, PUBLIC_CORS_PROXIES } from '../index.js';
 
 const FEED = '<rss><channel><item><title>x</title></item></channel></rss>';
 
@@ -23,7 +23,7 @@ test('returns the first proxy that yields a usable feed', async () => {
     allorigins: { body: FEED },
     'corsproxy.io': { body: FEED },
   });
-  const { text, via } = await proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 500 });
+  const { text, via } = await proxyRace('https://feed.example/rss', { proxies: PUBLIC_CORS_PROXIES, fetchImpl, timeoutMs: 500 });
   assert.equal(text, FEED);
   assert.match(via, /^proxy:\d$/);
 });
@@ -34,7 +34,7 @@ test('skips empty bodies and falls through to a populated proxy', async () => {
     allorigins: { body: '<rss></rss>' },
     'corsproxy.io': { body: FEED },
   });
-  const { text } = await proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 500 });
+  const { text } = await proxyRace('https://feed.example/rss', { proxies: PUBLIC_CORS_PROXIES, fetchImpl, timeoutMs: 500 });
   assert.equal(text, FEED);
 });
 
@@ -45,8 +45,28 @@ test('rejects when every transport fails', async () => {
     'corsproxy.io': { body: '' },
   });
   await assert.rejects(
-    proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 500 }),
+    proxyRace('https://feed.example/rss', { proxies: PUBLIC_CORS_PROXIES, fetchImpl, timeoutMs: 500 }),
   );
+});
+
+test('throws without an explicit proxies/originProxy opt-in', async () => {
+  // Public CORS proxies leak every fetched URL to a third party, so they must
+  // never be a silent default.
+  await assert.rejects(
+    proxyRace('https://feed.example/rss', { fetchImpl: async () => ({}) }),
+    /opt-in|originProxy/,
+  );
+});
+
+test('originProxy alone (no public proxies) is a valid configuration', async () => {
+  const fetchImpl = mockFetch({ 'my.origin': { body: FEED } });
+  const { via } = await proxyRace('https://feed.example/rss', {
+    originProxy: (u) => `https://my.origin/api/feed?url=${encodeURIComponent(u)}`,
+    originDelayMs: 0,
+    fetchImpl,
+    timeoutMs: 500,
+  });
+  assert.equal(via, 'origin');
 });
 
 test('uses a custom proxy list', async () => {
@@ -77,7 +97,7 @@ test('per-attempt timeout still applies without AbortSignal.any/timeout', async 
     });
     const started = Date.now();
     await assert.rejects(
-      proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 100 }),
+      proxyRace('https://feed.example/rss', { proxies: PUBLIC_CORS_PROXIES, fetchImpl, timeoutMs: 100 }),
     );
     // Without a working timeout signal this promise never settles (the test
     // would hang to its own timeout); settling quickly proves the abort fired.
