@@ -58,3 +58,32 @@ test('uses a custom proxy list', async () => {
   });
   assert.equal(via, 'proxy:0');
 });
+
+test('per-attempt timeout still applies without AbortSignal.any/timeout', async () => {
+  // Regression: the mergeSignals fallback used to `return a`, dropping the
+  // timeout signal — and with AbortSignal.timeout missing there was no
+  // timeout signal at all. Simulate an old engine by removing both statics.
+  const savedAny = AbortSignal.any;
+  const savedTimeout = AbortSignal.timeout;
+  delete AbortSignal.any;
+  delete AbortSignal.timeout;
+  try {
+    // A fetch that never resolves on its own but rejects when aborted.
+    const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => {
+      if (signal) {
+        if (signal.aborted) return reject(new Error('aborted'));
+        signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }
+    });
+    const started = Date.now();
+    await assert.rejects(
+      proxyRace('https://feed.example/rss', { fetchImpl, timeoutMs: 100 }),
+    );
+    // Without a working timeout signal this promise never settles (the test
+    // would hang to its own timeout); settling quickly proves the abort fired.
+    assert.ok(Date.now() - started < 5000);
+  } finally {
+    AbortSignal.any = savedAny;
+    AbortSignal.timeout = savedTimeout;
+  }
+});

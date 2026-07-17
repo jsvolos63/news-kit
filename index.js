@@ -621,15 +621,28 @@ export async function proxyRace(targetUrl, opts = {}) {
 
   async function attempt(t) {
     if (t.delay) await sleep(t.delay, controller.signal);
-    const localTimeout = AbortSignal.timeout
-      ? AbortSignal.timeout(timeoutMs)
-      : null;
-    const signal = mergeSignals(controller.signal, localTimeout);
-    const res = await fetchImpl(t.build(targetUrl), { signal });
-    if (!res || !res.ok) throw new Error(`${t.label}: HTTP ${res ? res.status : 'no-response'}`);
-    const text = await res.text();
-    if (!accept(text)) throw new Error(`${t.label}: empty/unusable body`);
-    return { text, via: t.label };
+    // Per-attempt timeout. AbortSignal.timeout when available; otherwise a
+    // hand-rolled controller so the timeout still applies on older engines
+    // (previously the timeout was silently dropped there).
+    let localTimeout;
+    let timeoutId = null;
+    if (typeof AbortSignal.timeout === 'function') {
+      localTimeout = AbortSignal.timeout(timeoutMs);
+    } else {
+      const tc = new AbortController();
+      timeoutId = setTimeout(() => tc.abort(), timeoutMs);
+      localTimeout = tc.signal;
+    }
+    try {
+      const signal = mergeSignals(controller.signal, localTimeout);
+      const res = await fetchImpl(t.build(targetUrl), { signal });
+      if (!res || !res.ok) throw new Error(`${t.label}: HTTP ${res ? res.status : 'no-response'}`);
+      const text = await res.text();
+      if (!accept(text)) throw new Error(`${t.label}: empty/unusable body`);
+      return { text, via: t.label };
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -653,8 +666,18 @@ function sleep(ms, signal) {
 function mergeSignals(a, b) {
   if (!b) return a;
   if (typeof AbortSignal.any === 'function') return AbortSignal.any([a, b]);
-  // Fallback: chain b's abort into a fresh controller already tied to a.
-  return a;
+  // Fallback: chain BOTH aborts into a fresh controller. (This used to
+  // `return a`, silently dropping b — the per-attempt timeout signal.)
+  const merged = new AbortController();
+  const onAbort = () => merged.abort();
+  for (const s of [a, b]) {
+    if (s.aborted) {
+      merged.abort();
+      break;
+    }
+    s.addEventListener('abort', onAbort, { once: true });
+  }
+  return merged.signal;
 }
 
 // ===================== time =====================
