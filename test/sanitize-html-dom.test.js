@@ -114,3 +114,44 @@ test('deeply nested hostile input does not overflow the stack', () => {
   // Must not throw; content beyond the recursion bound is dropped, not crashed on.
   assert.doesNotThrow(() => sanitizeHtmlToFragment(html));
 });
+
+test('per-tag attrs allowlist cannot smuggle an event handler', () => {
+  // A consumer allowlisting an on* attribute must still not get it — the
+  // internal denylist wins over the per-tag allowlist.
+  const out = htmlOf(sanitizeHtmlToFragment('<a href="https://example.com/a" onclick="steal()">x</a>', {
+    attrs: { A: ['href', 'onclick'] },
+  }));
+  assert.ok(!out.includes('onclick'), 'event handler dropped despite allowlist');
+  assert.match(out, /href="https:\/\/example\.com\/a"/);
+});
+
+test('per-tag attrs: a URL-bearing attribute beyond href/src is validated', () => {
+  // `background` is URL-bearing; an allowlisted dangerous value must be dropped,
+  // while a safe one is validated through and kept.
+  const bad = htmlOf(sanitizeHtmlToFragment('<img src="https://example.com/x.png" background="javascript:alert(1)">', {
+    attrs: { IMG: ['src', 'background'] },
+  }));
+  assert.ok(!bad.includes('javascript:'), 'dangerous URL attr dropped');
+  assert.ok(!/background=/.test(bad), 'dangerous background dropped entirely');
+  assert.match(bad, /src="https:\/\/example\.com\/x\.png"/);
+
+  const good = htmlOf(sanitizeHtmlToFragment('<img src="https://example.com/x.png" background="https://example.com/bg.png">', {
+    attrs: { IMG: ['src', 'background'] },
+  }));
+  assert.match(good, /background="https:\/\/example\.com\/bg\.png"/);
+});
+
+test('globalAttrs cannot yield style/id/name (denylist wins)', () => {
+  const out = htmlOf(sanitizeHtmlToFragment('<p style="x:y" id="a" name="b" dir="rtl">t</p>', {
+    globalAttrs: ['style', 'id', 'name', 'dir'],
+  }));
+  assert.ok(!/style=/.test(out), 'inline style rejected even when allowlisted');
+  assert.ok(!/id=/.test(out), 'id rejected even when allowlisted');
+  assert.ok(!/name=/.test(out), 'name rejected even when allowlisted');
+  assert.match(out, /dir="rtl"/); // benign attr still passes
+});
+
+test('TEMPLATE is blocked (removed with its subtree)', () => {
+  const out = htmlOf(sanitizeHtmlToFragment('<p>keep</p><template><img src=x onerror=alert(1)></template>'));
+  assert.equal(out, '<p>keep</p>');
+});

@@ -26,24 +26,35 @@ const NAMED = {
   hellip: '…',
 };
 
-/** Decode numeric (`&#39;` / `&#x27;`) and the common named entities. The literal
- *  `&amp;` -> `&` substitution is applied LAST so an already-decoded ampersand is
- *  never re-interpreted (e.g. `&amp;lt;` decodes to `&lt;`, not `<`). */
+/** Decode numeric (`&#39;` / `&#x27;`) and the common named entities. EVERY
+ *  ampersand reference — named `&amp;` AND the numeric forms `&#38;` / `&#x26;`
+ *  — is deferred to a single final pass so an already-decoded ampersand can
+ *  never trigger a second round of entity interpretation. Without this,
+ *  `&#38;lt;` would decode `&#38;`→`&` in the numeric pass and then `&lt;`→`<`,
+ *  smuggling a raw `<` into "plain" text; instead it decodes to the literal
+ *  string `&lt;` (matching `&amp;lt;`). */
 export function decodeEntities(s) {
   if (s == null) return '';
   let out = String(s)
-    // Numeric decimal: &#39;
-    .replace(/&#(\d+);/g, (_, n) => safeFromCodePoint(parseInt(n, 10)))
-    // Numeric hex: &#x27;
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => safeFromCodePoint(parseInt(n, 16)))
+    // Numeric decimal: &#39; — but defer refs to '&' (cp 38) to the final pass.
+    .replace(/&#(\d+);/g, (m, n) => {
+      const cp = parseInt(n, 10);
+      return cp === 38 ? m : safeFromCodePoint(cp);
+    })
+    // Numeric hex: &#x27; — likewise defer refs to '&' (0x26).
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, n) => {
+      const cp = parseInt(n, 16);
+      return cp === 38 ? m : safeFromCodePoint(cp);
+    })
     // Named entities, excluding amp (handled last).
     .replace(/&([a-zA-Z]+);/g, (m, name) => {
       const key = name.toLowerCase();
       if (key === 'amp') return m; // defer
       return Object.prototype.hasOwnProperty.call(NAMED, key) ? NAMED[key] : m;
     });
-  // Ampersand last.
-  out = out.replace(/&amp;/g, '&');
+  // Every ampersand reference last — &amp;, &#38;, &#x26; each become a single
+  // literal '&', in one pass that does not re-scan its own output.
+  out = out.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
   return out;
 }
 
@@ -778,7 +789,7 @@ const DEFAULT_ALLOWED = new Set([
 const DEFAULT_BLOCKED = new Set([
   'SCRIPT', 'STYLE', 'IFRAME', 'NOSCRIPT', 'FORM', 'INPUT', 'BUTTON',
   'SELECT', 'TEXTAREA', 'SVG', 'VIDEO', 'AUDIO', 'OBJECT', 'EMBED',
-  'LINK', 'META', 'BASE', 'TITLE',
+  'LINK', 'META', 'BASE', 'TITLE', 'TEMPLATE',
 ]);
 
 const DEFAULT_ATTRS_BY_TAG = {
@@ -806,6 +817,19 @@ export function isSafeContentUrl(url) {
   return !/^[a-z][a-z0-9+.-]*:/i.test(trimmed);
 }
 
+/** Strict URL validator for readers rendering fully untrusted extracted HTML:
+ *  accepts ONLY absolute `http(s)://host…` URLs. Rejects protocol-relative
+ *  (`//host`), origin-relative (`/path`) and bare-relative references so a
+ *  hostile link can't resolve against the reader's own origin. Recommended:
+ *  such readers should pass this as `options.safeUrl` to
+ *  `sanitizeHtmlToFragment` (and use it directly for standalone link checks)
+ *  instead of the permissive default `isSafeContentUrl`. Pure. */
+export function strictSafeContentUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.replace(/[\u0000-\u001F\u007F]/g, '').trim();
+  return /^https?:\/\/[^/]/i.test(trimmed);
+}
+
 const DANGEROUS_SCHEME_RE = /(javascript|data|vbscript|file|blob):/;
 
 /** True if a `srcset` value is safe. `isSafe` is the per-URL validator (defaults
@@ -825,7 +849,22 @@ export function isSafeSrcset(value, isSafe = isSafeContentUrl) {
     .every(ok);
 }
 
-const URL_ATTRS = new Set(['href', 'src', 'srcset']);
+// URL-bearing attribute names routed through the URL validator (cfg.urlOf) no
+// matter which tag allowlists them, so a consumer can never allowlist a
+// URL-carrying attribute and get it copied unvalidated. `srcset` keeps its
+// dedicated isSafeSrcset handling.
+const URL_ATTRS = new Set([
+  'href', 'src', 'srcset', 'poster', 'background', 'formaction', 'action',
+  'cite', 'data', 'longdesc', 'ping', 'xlink:href', 'manifest',
+]);
+// Attribute names that are ALWAYS dropped, regardless of any per-tag or global
+// allowlist: event handlers (on*), plus a small set of dangerous/identity
+// attributes (inline style, id/name collisions, the `is` custom-element hook).
+const DENIED_ATTRS = new Set(['style', 'id', 'name', 'is']);
+/** True if `lname` (already lowercased) must be dropped no matter what. */
+function isDeniedAttr(lname) {
+  return /^on/i.test(lname) || DENIED_ATTRS.has(lname);
+}
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 const MAX_DEPTH = 256;
 
@@ -914,24 +953,30 @@ function buildAllowed(node, tag, doc, cfg, depth) {
   const out = doc.createElement(tag);
   let hasHref = false;
   for (const name of cfg.attrs[tag] || []) {
+    const lname = String(name).toLowerCase();
+    // Internal denylist wins over any allowlist entry.
+    if (isDeniedAttr(lname)) continue;
     const val = node.getAttribute(name);
     if (val == null) continue;
-    if (name === 'href' || name === 'src') {
+    if (lname === 'srcset') {
+      // Keep the original value only if every candidate URL is safe.
+      if (isSafeSrcset(val, (u) => cfg.urlOf(u) != null)) out.setAttribute(name, val);
+    } else if (URL_ATTRS.has(lname)) {
+      // Any URL-bearing attribute — not just href/src — is validated.
       const safe = cfg.urlOf(val);
       if (!safe) continue;
       out.setAttribute(name, safe);
-      if (name === 'href') hasHref = true;
-    } else if (name === 'srcset') {
-      // Keep the original value only if every candidate URL is safe.
-      if (isSafeSrcset(val, (u) => cfg.urlOf(u) != null)) out.setAttribute(name, val);
+      if (lname === 'href') hasHref = true;
     } else {
       out.setAttribute(name, val);
     }
   }
-  // Global (non-URL) attributes permitted on any element. Reject URL-bearing and
-  // event-handler names defensively, even if a consumer mistakenly allowlists one.
+  // Global (non-URL) attributes permitted on any element. The internal denylist
+  // and the URL-bearing set both win over the allowlist, so a consumer can't
+  // mistakenly allow an event handler, inline style, or URL attribute here.
   for (const name of cfg.globalAttrs) {
-    if (URL_ATTRS.has(name) || /^on/i.test(name) || out.hasAttribute(name)) continue;
+    const lname = String(name).toLowerCase();
+    if (isDeniedAttr(lname) || URL_ATTRS.has(lname) || out.hasAttribute(name)) continue;
     const val = node.getAttribute(name);
     if (val != null) out.setAttribute(name, val);
   }

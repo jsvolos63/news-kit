@@ -19,6 +19,19 @@ test('ampersand is decoded last (no double-decode)', () => {
   assert.equal(decodeEntities('A&amp;amp;B'), 'A&amp;B');
 });
 
+test('numeric ampersand refs do not double-decode either', () => {
+  // &#38; / &#x26; are deferred to the same final pass as &amp;, so a numeric
+  // ampersand ref can never trigger a second round of entity interpretation.
+  assert.equal(decodeEntities('&#38;lt;'), '&lt;'); // decimal 38 = '&'
+  assert.equal(decodeEntities('&#x26;lt;'), '&lt;'); // hex 26 = '&'
+  assert.equal(decodeEntities('&#x26;gt;'), '&gt;');
+  // A lone numeric ampersand ref still decodes to a single literal '&'.
+  assert.equal(decodeEntities('a &#38; b'), 'a & b');
+  assert.equal(decodeEntities('a &#x26; b'), 'a & b');
+  // Non-ampersand numeric refs are unaffected.
+  assert.equal(decodeEntities('it&#39;s'), "it's");
+});
+
 test('leaves unknown entities untouched and handles null', () => {
   assert.equal(decodeEntities('&unknown;'), '&unknown;');
   assert.equal(decodeEntities(null), '');
