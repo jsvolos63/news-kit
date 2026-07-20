@@ -13,6 +13,7 @@ const {
   newsRiverCard,
   riverDayLabel,
   ensureNewsRiverStyles,
+  isStandaloneDisplay,
   NEWS_RIVER_CSS,
 } = await import('../index.js');
 
@@ -109,6 +110,39 @@ test('headline with a safe url is a decorated anchor; unsafe url renders no link
   const unsafe = newsRiverCard({ title: 'T', url: 'javascript:alert(1)' }, { doc: window.document, now: NOW });
   assert.equal(unsafe.querySelector('.nk-headline a'), null);
   assert.equal(unsafe.querySelector('.nk-headline span').textContent, 'T');
+});
+
+test('standalone display navigates in place: no target=_blank to orphan a launch window', () => {
+  const card = newsRiverCard({
+    title: 'T',
+    url: 'https://example.com/a',
+    source: 'nyt',
+    badge: { text: 'Deep Link', kind: 'link' },
+  }, { doc: window.document, now: NOW, standalone: true, sourceLabels: { nyt: 'NYT' } });
+
+  const a = card.querySelector('.nk-headline a');
+  assert.equal(a.getAttribute('href'), 'https://example.com/a');
+  assert.equal(a.getAttribute('target'), null);
+  assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+  // The "Read at" byline link follows the same rule.
+  assert.equal(card.querySelector('.nk-byline a').getAttribute('target'), null);
+
+  // renderNewsRiver threads the flag through to every card.
+  const el = container();
+  renderNewsRiver(el, [{ title: 'T', url: 'https://example.com/b', ts: NOW }], { now: NOW, standalone: true });
+  assert.equal(el.querySelector('.nk-headline a').getAttribute('target'), null);
+});
+
+test('isStandaloneDisplay: iOS flag, display-mode query, fails closed', () => {
+  assert.equal(isStandaloneDisplay(null), false);
+  assert.equal(isStandaloneDisplay({}), false);
+  assert.equal(isStandaloneDisplay({ navigator: { standalone: true } }), true);
+  assert.equal(isStandaloneDisplay({ navigator: { standalone: false } }), false);
+  assert.equal(isStandaloneDisplay({ matchMedia: (q) => ({ matches: q === '(display-mode: standalone)' }) }), true);
+  assert.equal(isStandaloneDisplay({ matchMedia: () => ({ matches: false }) }), false);
+  assert.equal(isStandaloneDisplay({ matchMedia: () => { throw new Error('boom'); } }), false);
+  // A plain browser-tab window (jsdom) is not standalone, so cards keep _blank.
+  assert.equal(isStandaloneDisplay(window), false);
 });
 
 test('onOpen intercepts plain clicks, honors `false` (deep link), ignores modified clicks', () => {
