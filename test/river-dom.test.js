@@ -228,3 +228,38 @@ test('styles:false skips installation into a fresh document', async () => {
   assert.equal(fresh.window.document.querySelectorAll('style').length, 0);
   assert.equal(el.querySelectorAll('.nk-card').length, 1);
 });
+
+test('an out-of-range numeric ts cannot crash the render (treated as undated)', () => {
+  const el = container();
+  renderNewsRiver(el, [
+    { title: 'legit', ts: NOW - 1000 },
+    { title: 'hostile', ts: 1e30 },
+    { title: 'negative', ts: -1e30 },
+  ], { now: NOW });
+  const titles = [...el.querySelectorAll('.nk-headline')].map((h) => h.textContent);
+  assert.deepEqual(titles, ['legit', 'hostile', 'negative']);
+  assert.equal(riverDayLabel(1e30, NOW), null);
+});
+
+test('undated items get a neutral divider, not the previous day heading', () => {
+  const el = container();
+  renderNewsRiver(el, [
+    { title: 'dated', ts: NOW - 1000 },
+    { title: 'undated' },
+  ], { now: NOW });
+  const days = [...el.querySelectorAll('.nk-day')].map((d) => d.textContent);
+  assert.deepEqual(days, ['Today', 'Earlier']);
+
+  const only = container();
+  renderNewsRiver(only, [{ title: 'undated-only' }], { now: NOW });
+  assert.equal(only.querySelectorAll('.nk-day').length, 0);
+});
+
+test('a prototype-chain source key never resolves an accent', () => {
+  for (const source of ['__proto__', 'constructor', 'hasOwnProperty', 'toString']) {
+    const card = newsRiverCard({ title: 'T', source }, {
+      doc: window.document, now: NOW, accents: { guardian: '#0084c6' },
+    });
+    assert.equal(card.style.getPropertyValue('--nk-accent'), '', source);
+  }
+});
