@@ -951,3 +951,407 @@ function toSet(v, fallback) {
   return fallback;
 }
 
+// ===================== render-river =====================
+// The John's News river presentation, extracted as the family's shared news
+// UI: a newest-first column of article cards, grouped under Today/Yesterday/
+// weekday dividers. Each card carries a meta line (optional favicon, bold
+// source label, relative time, optional classification chip, right-aligned
+// FULL TEXT / DEEP LINK badge), an optional kicker, a serif headline, a
+// 3-line-clamped summary, a byline and an optional lazy thumbnail, with a
+// per-source accent color on the card's left edge and source name.
+//
+// Rendering is DOM-node based (createElement + text nodes) — feed text can
+// never be interpreted as HTML, and it works identically from ESM pages and
+// classic-script global builds. URLs (headline href, thumbnail/favicon src)
+// pass through safeContentUrl, so javascript:/data: links from a hostile
+// feed are dropped, not rendered.
+//
+// DEEP-LINK RULE (the elegance contract): when a story can't be read in-app,
+// its headline must stay a PLAIN anchor — no window.open, no intercepted
+// click. A plain tap on a real <a href> is what lets iOS/Android hand the
+// URL to the publisher's own app via universal links, so an NYT/Economist/
+// Politico headline opens directly in that app. The onOpen callback
+// preserves this: it only sees plain unmodified left-clicks, and returning
+// `false` from it means "let the anchor navigate" (deep link); any other
+// return prevents default so the app can open its in-app reader instead.
+// Modifier/middle clicks always fall through to normal browser behavior.
+//
+// Styling ships as NEWS_RIVER_CSS and installs via ensureNewsRiverStyles():
+// a constructed stylesheet (document.adoptedStyleSheets) where available —
+// CSSOM insertion is exempt from CSP style-src, so it works under the
+// family's strict no-'unsafe-inline' policies — falling back to a <style>
+// tag elsewhere (jsdom, older engines, CSP-less pages). Theme variables are
+// declared at zero specificity (:where), so a consumer restyles the river
+// with a plain `.nk-river { --nk-card: …; }` rule in its own stylesheet.
+
+export const NEWS_RIVER_CSS = `
+:where(.nk-river) {
+  --nk-card: #ffffff;
+  --nk-ink: #14171a;
+  --nk-muted: #5b6570;
+  --nk-line: #e3e7eb;
+  --nk-link: #0b5cad;
+  --nk-full: #0a7d3f;
+  --nk-chip: #eef1f4;
+  --nk-shadow: 0 1px 2px rgba(20, 23, 26, 0.06), 0 2px 8px rgba(20, 23, 26, 0.04);
+  --nk-serif: Georgia, 'Times New Roman', serif;
+  --nk-radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :where(.nk-river) {
+    --nk-card: #171b1e;
+    --nk-ink: #e8ebee;
+    --nk-muted: #9aa4ad;
+    --nk-line: #262c31;
+    --nk-link: #5aa9f5;
+    --nk-full: #4cc38a;
+    --nk-chip: #20262b;
+    --nk-shadow: none;
+  }
+}
+.nk-river { display: flex; flex-direction: column; gap: 10px; }
+.nk-day {
+  font-family: var(--nk-serif);
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--nk-muted);
+  margin: 14px 2px 2px;
+  padding-bottom: 5px;
+  border-bottom: 2px solid var(--nk-line);
+}
+.nk-day:first-child { margin-top: 2px; }
+.nk-card {
+  background: var(--nk-card);
+  border: 1px solid var(--nk-line);
+  border-left: 3px solid var(--nk-accent, var(--nk-line));
+  border-radius: var(--nk-radius);
+  padding: 14px 16px;
+  box-shadow: var(--nk-shadow);
+}
+.nk-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nk-muted);
+  margin-bottom: 6px;
+}
+.nk-favicon { width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; }
+.nk-src { font-weight: 700; color: var(--nk-accent, var(--nk-ink)); }
+.nk-dot { opacity: 0.5; }
+.nk-time { white-space: nowrap; }
+.nk-chip {
+  background: var(--nk-chip);
+  color: var(--nk-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.nk-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--nk-chip);
+  color: var(--nk-muted);
+  white-space: nowrap;
+}
+.nk-badge-full { background: color-mix(in srgb, var(--nk-full) 16%, transparent); color: var(--nk-full); }
+.nk-badge-link { background: var(--nk-chip); color: var(--nk-muted); }
+.nk-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nk-accent, var(--nk-link));
+  margin: 0 0 2px;
+}
+.nk-headline {
+  font-family: var(--nk-serif);
+  font-size: 18.5px;
+  line-height: 1.28;
+  margin: 2px 0 6px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--nk-ink);
+}
+.nk-headline a, .nk-headline button, .nk-headline span {
+  color: inherit;
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nk-headline span { cursor: default; }
+.nk-headline a:hover, .nk-headline button:hover { color: var(--nk-link); text-decoration: underline; }
+.nk-summary {
+  font-size: 14.5px;
+  color: var(--nk-muted);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nk-row { display: flex; gap: 12px; align-items: flex-start; }
+.nk-main { flex: 1; min-width: 0; }
+.nk-thumb {
+  width: 78px;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 10px;
+  flex-shrink: 0;
+  margin-top: 22px;
+  background: var(--nk-chip);
+}
+.nk-byline { font-size: 12px; color: var(--nk-muted); margin-top: 8px; }
+.nk-byline a { color: var(--nk-link); text-decoration: none; }
+.nk-empty { text-align: center; color: var(--nk-muted); padding: 40px 0; font-size: 14.5px; margin: 0; }
+`;
+
+// Style installation is idempotent per document (flag property, not a DOM
+// query, so it also works before <head> exists).
+const RIVER_STYLE_FLAG = '__jfsNewsRiverStyles';
+
+/** Install NEWS_RIVER_CSS into `doc` exactly once. Constructed stylesheet
+ *  first (CSP-safe under style-src without 'unsafe-inline'); <style> tag
+ *  fallback for engines without adoptedStyleSheets. */
+export function ensureNewsRiverStyles(doc = globalThis.document) {
+  if (!doc) throw new Error('ensureNewsRiverStyles requires a DOM (browser).');
+  if (doc[RIVER_STYLE_FLAG]) return;
+  doc[RIVER_STYLE_FLAG] = true;
+  try {
+    const Sheet = (doc.defaultView || globalThis).CSSStyleSheet;
+    const sheet = new Sheet();
+    sheet.replaceSync(NEWS_RIVER_CSS);
+    doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+  } catch {
+    // No constructable-stylesheet support — fall back to a <style> tag.
+    // (Blocked by a strict CSP, but every engine with such a CSP deployment
+    // in this family also supports adoptedStyleSheets.)
+    const style = doc.createElement('style');
+    style.textContent = NEWS_RIVER_CSS;
+    (doc.head || doc.documentElement).appendChild(style);
+  }
+}
+
+/** "Today" / "Yesterday" / "Thursday, July 17" in the reader's local time.
+ *  Accepts epoch ms, ISO string or Date; `now` injectable for tests.
+ *  Returns null for missing/invalid dates. */
+export function riverDayLabel(ts, now = Date.now()) {
+  const t = toMs(ts);
+  if (t == null) return null;
+  const d = new Date(t);
+  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(new Date(now)) - startOfDay(d)) / 86400000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+// Element helper: children are nodes or strings; strings become TEXT nodes,
+// so feed content is never parsed as HTML.
+function riverNode(doc, tag, className, ...children) {
+  const node = doc.createElement(tag);
+  if (className) node.className = className;
+  for (const c of children) {
+    if (c == null || c === '') continue;
+    node.appendChild(typeof c === 'string' ? doc.createTextNode(c) : c);
+  }
+  return node;
+}
+
+/** Best-effort publication time in epoch ms: ts, publishedAt, published_at. */
+function riverItemTime(item) {
+  for (const v of [item.ts, item.publishedAt, item.published_at]) {
+    const t = toMs(v);
+    if (t != null) return t;
+  }
+  return null;
+}
+
+function riverSourceLabel(item, opts) {
+  if (item.sourceLabel) return String(item.sourceLabel);
+  const key = item.source == null ? '' : String(item.source);
+  if (!key) return '';
+  const labels = opts.sourceLabels;
+  if (typeof labels === 'function') return String(labels(key) || key);
+  if (labels && Object.prototype.hasOwnProperty.call(labels, key)) return String(labels[key]);
+  return key;
+}
+
+function riverExternalLink(a, href) {
+  a.setAttribute('href', href);
+  a.setAttribute('target', '_blank');
+  a.setAttribute('rel', 'noopener noreferrer');
+}
+
+/**
+ * Build one river card. Exported separately from renderNewsRiver so an app
+ * with its own layout (columns, tabs) can place cards itself.
+ *
+ * Item fields (all optional except title): title, url, source (key used for
+ * data-source + accents), sourceLabel, ts | publishedAt | published_at,
+ * summary, authors (array or string), image, icon (favicon URL), kicker,
+ * tag (small chip after the time), badge ({ text, kind }: kind 'full' and
+ * 'link' get the FULL TEXT / DEEP LINK treatments; other kinds style via
+ * .nk-badge-<kind>).
+ *
+ * Options: doc, now, sourceLabels (map or fn), accents (source -> CSS color,
+ * applied as the --nk-accent custom property via CSSOM), onOpen(item, event)
+ * (see the deep-link rule above), readAt ('link' default | 'always' |
+ * 'never' — appends a "Read at <source> →" byline link), decorate(card, item).
+ */
+export function newsRiverCard(item, opts = {}) {
+  const doc = opts.doc || globalThis.document;
+  if (!doc) throw new Error('newsRiverCard requires a DOM (browser).');
+  const now = opts.now ?? Date.now();
+  const label = riverSourceLabel(item, opts);
+  const url = item.url ? safeContentUrl(item.url) : null;
+  const badge = item.badge && item.badge.text ? item.badge : null;
+
+  const meta = riverNode(doc, 'div', 'nk-meta');
+  const iconUrl = item.icon ? safeContentUrl(item.icon) : null;
+  if (iconUrl) {
+    const icon = riverNode(doc, 'img', 'nk-favicon');
+    icon.setAttribute('src', iconUrl);
+    icon.setAttribute('alt', '');
+    icon.setAttribute('loading', 'lazy');
+    icon.addEventListener('error', () => icon.remove());
+    meta.appendChild(icon);
+  }
+  if (label) meta.appendChild(riverNode(doc, 'span', 'nk-src', label));
+  const t = riverItemTime(item);
+  if (t != null) {
+    if (label) meta.appendChild(riverNode(doc, 'span', 'nk-dot', '·'));
+    const time = riverNode(doc, 'time', 'nk-time', relativeTime(t, now));
+    time.setAttribute('datetime', new Date(t).toISOString());
+    meta.appendChild(time);
+  }
+  if (item.tag) meta.appendChild(riverNode(doc, 'span', 'nk-chip', String(item.tag)));
+  if (badge) {
+    const kind = /^[a-z][a-z0-9-]*$/i.test(String(badge.kind || '')) ? ` nk-badge-${badge.kind}` : '';
+    meta.appendChild(riverNode(doc, 'span', `nk-badge${kind}`, String(badge.text)));
+  }
+
+  // Headline. With a URL it is ALWAYS a real anchor (deep links + open-in-
+  // new-tab affordances survive); onOpen only intercepts plain left-clicks
+  // and can decline by returning false.
+  const title = String(item.title || '');
+  let headline;
+  if (url) {
+    headline = riverNode(doc, 'a', null, title);
+    riverExternalLink(headline, url);
+    if (typeof opts.onOpen === 'function') {
+      headline.addEventListener('click', (e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        if (opts.onOpen(item, e) !== false) e.preventDefault();
+      });
+    }
+  } else if (typeof opts.onOpen === 'function') {
+    headline = riverNode(doc, 'button', null, title);
+    headline.setAttribute('type', 'button');
+    headline.addEventListener('click', (e) => { opts.onOpen(item, e); });
+  } else {
+    headline = riverNode(doc, 'span', null, title);
+  }
+
+  const children = [meta];
+  if (item.kicker) children.push(riverNode(doc, 'div', 'nk-kicker', String(item.kicker)));
+  children.push(riverNode(doc, 'h3', 'nk-headline', headline));
+  if (item.summary) children.push(riverNode(doc, 'p', 'nk-summary', String(item.summary)));
+
+  const authors = Array.isArray(item.authors)
+    ? item.authors.filter(Boolean).join(', ')
+    : (item.authors ? String(item.authors) : '');
+  const readAtMode = opts.readAt || 'link';
+  const readAt = url && label && (readAtMode === 'always' || (readAtMode === 'link' && badge && badge.kind === 'link'));
+  if (authors || readAt) {
+    const by = riverNode(doc, 'div', 'nk-byline');
+    if (authors) by.appendChild(doc.createTextNode(authors));
+    if (readAt) {
+      if (authors) by.appendChild(doc.createTextNode(' · '));
+      const a = riverNode(doc, 'a', null, `Read at ${label} →`);
+      riverExternalLink(a, url);
+      by.appendChild(a);
+    }
+    children.push(by);
+  }
+
+  let body = riverNode(doc, 'div', 'nk-main', ...children);
+  const imgUrl = item.image ? safeContentUrl(item.image) : null;
+  if (imgUrl) {
+    const thumb = riverNode(doc, 'img', 'nk-thumb');
+    thumb.setAttribute('src', imgUrl);
+    thumb.setAttribute('alt', '');
+    thumb.setAttribute('loading', 'lazy');
+    // A broken/blocked image removes itself rather than leaving an empty frame.
+    thumb.addEventListener('error', () => thumb.remove());
+    body = riverNode(doc, 'div', 'nk-row', body, thumb);
+  }
+
+  const card = riverNode(doc, 'article', 'nk-card', body);
+  if (item.source != null && item.source !== '') card.setAttribute('data-source', String(item.source));
+  const accent = opts.accents && item.source != null ? opts.accents[item.source] : null;
+  // CSSOM property assignment — CSP-safe (style-src governs markup, not CSSOM).
+  if (accent) card.style.setProperty('--nk-accent', String(accent));
+  if (typeof opts.decorate === 'function') opts.decorate(card, item);
+  return card;
+}
+
+/**
+ * Render `items` into `container` as the river: styles installed (unless
+ * opts.styles === false), newest-first (stable re-sort on publication time;
+ * undated items keep their relative order at the end), day dividers dropped
+ * wherever the local day changes (opts.groupByDay === false disables), and
+ * opts.emptyMessage shown when there is nothing to render. All newsRiverCard
+ * options apply.
+ */
+export function renderNewsRiver(container, items, opts = {}) {
+  const doc = opts.doc || container.ownerDocument || globalThis.document;
+  if (opts.styles !== false) ensureNewsRiverStyles(doc);
+  container.classList.add('nk-river');
+  container.replaceChildren();
+
+  const list = Array.isArray(items) ? items.filter((it) => it && it.title) : [];
+  if (!list.length) {
+    container.appendChild(riverNode(doc, 'p', 'nk-empty', opts.emptyMessage || 'No stories yet.'));
+    return;
+  }
+
+  const now = opts.now ?? Date.now();
+  const sorted = list
+    .map((it, i) => ({ it, i, t: riverItemTime(it) }))
+    .sort((a, b) => {
+      if (a.t != null && b.t != null && a.t !== b.t) return b.t - a.t;
+      if (a.t != null && b.t == null) return -1;
+      if (a.t == null && b.t != null) return 1;
+      return a.i - b.i;
+    });
+
+  const cardOpts = { ...opts, doc, now };
+  let lastDay = null;
+  for (const { it, t } of sorted) {
+    if (opts.groupByDay !== false) {
+      const day = t != null ? riverDayLabel(t, now) : null;
+      if (day && day !== lastDay) {
+        container.appendChild(riverNode(doc, 'h2', 'nk-day', day));
+        lastDay = day;
+      }
+    }
+    container.appendChild(newsRiverCard(it, cardOpts));
+  }
+}
+
