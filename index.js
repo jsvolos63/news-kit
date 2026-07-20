@@ -1206,6 +1206,37 @@ function riverExternalLink(a, href) {
   a.setAttribute('rel', 'noopener noreferrer');
 }
 
+/** Best-effort dek cleanup: feeds frequently hand back a "summary" that is
+ *  just the headline again (or the article body, which opens by repeating
+ *  the headline). Returns the summary worth showing under the headline —
+ *  '' when it would merely duplicate it, the trailing prose when it starts
+ *  by repeating it verbatim, the input untouched otherwise. Exported so
+ *  apps with their own card renderers share the one policy. */
+export function dedupedNewsSummary(title, summary) {
+  const t = String(title || '').trim();
+  const s = String(summary || '').trim();
+  if (!s) return '';
+  if (!t) return s;
+  const norm = (x) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const nt = norm(t);
+  const ns = norm(s);
+  if (!nt) return s;
+  if (!ns) return '';
+  // The summary IS the headline: identical, a truncation of it, or the
+  // headline plus a few trailing characters (ellipsis, "Read more").
+  if (ns === nt || nt.startsWith(ns)) return '';
+  if (ns.startsWith(nt) && ns.length - nt.length < 24) return '';
+  // Article bodies that open by repeating the headline verbatim: keep only
+  // the prose after it (when there's a meaningful amount).
+  if (s.slice(0, t.length).toLowerCase() === t.toLowerCase()) {
+    const rest = s.slice(t.length).replace(/^[\s \-–—:.,;!?…]+/, '');
+    return norm(rest).length >= 24 ? rest : '';
+  }
+  // Normalized-prefix overlap without a verbatim match (punctuation/casing
+  // drift): keep the summary — better an echo than eaten prose.
+  return s;
+}
+
 /**
  * Build one river card. Exported separately from renderNewsRiver so an app
  * with its own layout (columns, tabs) can place cards itself.
@@ -1279,7 +1310,12 @@ export function newsRiverCard(item, opts = {}) {
   const children = [meta];
   if (item.kicker) children.push(riverNode(doc, 'div', 'nk-kicker', String(item.kicker)));
   children.push(riverNode(doc, 'h3', 'nk-headline', headline));
-  if (item.summary) children.push(riverNode(doc, 'p', 'nk-summary', String(item.summary)));
+  // A dek that just repeats the headline is noise — dedupe by default
+  // (opts.dedupeSummary === false renders the summary verbatim).
+  const dek = opts.dedupeSummary === false
+    ? (item.summary ? String(item.summary) : '')
+    : dedupedNewsSummary(title, item.summary);
+  if (dek) children.push(riverNode(doc, 'p', 'nk-summary', dek));
 
   const authors = Array.isArray(item.authors)
     ? item.authors.filter(Boolean).join(', ')

@@ -263,3 +263,28 @@ test('a prototype-chain source key never resolves an accent', () => {
     assert.equal(card.style.getPropertyValue('--nk-accent'), '', source);
   }
 });
+
+test('a dek that duplicates the headline is suppressed or trimmed', async () => {
+  const { dedupedNewsSummary } = await import('../index.js');
+  const T = 'Bears Sign Veteran Tackle to One-Year Deal';
+  // Exact/near duplicates disappear.
+  assert.equal(dedupedNewsSummary(T, T), '');
+  assert.equal(dedupedNewsSummary(T, T + '…'), '');
+  assert.equal(dedupedNewsSummary(T, 'Bears Sign Veteran Tackle to One-Year'), ''); // truncated echo
+  assert.equal(dedupedNewsSummary(T, T + ' Read more'), '');
+  // Body text that opens with the headline keeps only the prose after it.
+  const trimmed = dedupedNewsSummary(T, T + ' — The team announced the move Tuesday morning after workouts.');
+  assert.equal(trimmed, 'The team announced the move Tuesday morning after workouts.');
+  // A real dek passes through untouched.
+  const dek = 'The veteran lineman spent four seasons in Green Bay.';
+  assert.equal(dedupedNewsSummary(T, dek), dek);
+  assert.equal(dedupedNewsSummary('', dek), dek);
+  assert.equal(dedupedNewsSummary(T, ''), '');
+
+  // And the card applies it by default…
+  const card = newsRiverCard({ title: T, summary: T }, { doc: window.document, now: NOW });
+  assert.equal(card.querySelector('.nk-summary'), null);
+  // …unless opted out.
+  const verbatim = newsRiverCard({ title: T, summary: T }, { doc: window.document, now: NOW, dedupeSummary: false });
+  assert.equal(verbatim.querySelector('.nk-summary').textContent, T);
+});
