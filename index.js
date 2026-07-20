@@ -725,10 +725,18 @@ export function relativeTime(ts, now = Date.now()) {
   return sameYear ? base : `${base}, ${d.getFullYear()}`;
 }
 
+// Date can only represent ±8.64e15 ms; a numeric timestamp beyond that range
+// makes new Date(t).toISOString() THROW (RangeError) rather than go NaN, so a
+// single hostile feed item could otherwise crash a whole render. Out-of-range
+// numbers are treated as "no date".
+const MAX_DATE_MS = 8.64e15;
+
 function toMs(ts) {
   if (ts == null) return null;
   if (ts instanceof Date) return Number.isNaN(ts.getTime()) ? null : ts.getTime();
-  if (typeof ts === 'number') return Number.isFinite(ts) ? ts : null;
+  if (typeof ts === 'number') {
+    return Number.isFinite(ts) && Math.abs(ts) <= MAX_DATE_MS ? ts : null;
+  }
   const parsed = Date.parse(ts);
   return Number.isNaN(parsed) ? null : parsed;
 }
@@ -1304,7 +1312,13 @@ export function newsRiverCard(item, opts = {}) {
 
   const card = riverNode(doc, 'article', 'nk-card', body);
   if (item.source != null && item.source !== '') card.setAttribute('data-source', String(item.source));
-  const accent = opts.accents && item.source != null ? opts.accents[item.source] : null;
+  // Own-property lookup only — `source` is feed-controlled, so a key like
+  // '__proto__' or 'constructor' must not walk the prototype chain (same
+  // guard riverSourceLabel applies to the sourceLabels map).
+  const accent = opts.accents && item.source != null
+    && Object.prototype.hasOwnProperty.call(opts.accents, item.source)
+    ? opts.accents[item.source]
+    : null;
   // CSSOM property assignment — CSP-safe (style-src governs markup, not CSSOM).
   if (accent) card.style.setProperty('--nk-accent', String(accent));
   if (typeof opts.decorate === 'function') opts.decorate(card, item);
@@ -1345,7 +1359,10 @@ export function renderNewsRiver(container, items, opts = {}) {
   let lastDay = null;
   for (const { it, t } of sorted) {
     if (opts.groupByDay !== false) {
-      const day = t != null ? riverDayLabel(t, now) : null;
+      // Undated items sort last; give them a neutral divider instead of
+      // letting them sit under the previous (wrong) day's heading. A river
+      // of ONLY undated items gets no divider at all.
+      const day = t != null ? riverDayLabel(t, now) : (lastDay != null ? (opts.undatedLabel || 'Earlier') : null);
       if (day && day !== lastDay) {
         container.appendChild(riverNode(doc, 'h2', 'nk-day', day));
         lastDay = day;
