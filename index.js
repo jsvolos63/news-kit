@@ -984,6 +984,19 @@ function toSet(v, fallback) {
 // return prevents default so the app can open its in-app reader instead.
 // Modifier/middle clicks always fall through to normal browser behavior.
 //
+// WHERE the anchor navigates depends on how the page is displayed. In a
+// browser tab, external links carry target=_blank so the river stays put
+// and closing the publisher tab lands the reader back on it. As an
+// INSTALLED app (standalone display mode) there are no tabs: _blank spawns
+// a separate launch window first, and when iOS hands the URL to the
+// publisher's app that orphaned window survives underneath — closing the
+// publisher drops the reader onto a stale window they must close to get
+// back to the app. So standalone cards navigate the current context
+// instead: a universal-link handoff leaves the app untouched, and a plain
+// web target opens in the OS's in-app browser overlay, which returns
+// cleanly. Detection is automatic (isStandaloneDisplay); opts.standalone
+// overrides it.
+//
 // Styling ships as NEWS_RIVER_CSS and installs via ensureNewsRiverStyles():
 // a constructed stylesheet (document.adoptedStyleSheets) where available —
 // CSSOM insertion is exempt from CSP style-src, so it works under the
@@ -1200,9 +1213,26 @@ function riverSourceLabel(item, opts) {
   return key;
 }
 
-function riverExternalLink(a, href) {
+/** True when the page runs as an installed app (home-screen / standalone
+ *  PWA) rather than in a browser tab. iOS home-screen apps expose
+ *  navigator.standalone; everything else answers the display-mode media
+ *  query. Fails closed (false → browser-tab behavior). */
+export function isStandaloneDisplay(win = globalThis.window) {
+  if (!win) return false;
+  try {
+    if (win.navigator && win.navigator.standalone === true) return true;
+    return !!(win.matchMedia && win.matchMedia('(display-mode: standalone)').matches);
+  } catch {
+    return false;
+  }
+}
+
+// See the deep-link rule above: _blank in a browser tab, current-context
+// navigation in standalone display so a handoff to the publisher's app
+// can't leave an orphaned launch window behind.
+function riverExternalLink(a, href, standalone) {
   a.setAttribute('href', href);
-  a.setAttribute('target', '_blank');
+  if (!standalone) a.setAttribute('target', '_blank');
   a.setAttribute('rel', 'noopener noreferrer');
 }
 
@@ -1251,12 +1281,16 @@ export function dedupedNewsSummary(title, summary) {
  * Options: doc, now, sourceLabels (map or fn), accents (source -> CSS color,
  * applied as the --nk-accent custom property via CSSOM), onOpen(item, event)
  * (see the deep-link rule above), readAt ('link' default | 'always' |
- * 'never' — appends a "Read at <source> →" byline link), decorate(card, item).
+ * 'never' — appends a "Read at <source> →" byline link), standalone
+ * (boolean — overrides the automatic installed-app detection that decides
+ * whether external links carry target=_blank; see the deep-link rule),
+ * decorate(card, item).
  */
 export function newsRiverCard(item, opts = {}) {
   const doc = opts.doc || globalThis.document;
   if (!doc) throw new Error('newsRiverCard requires a DOM (browser).');
   const now = opts.now ?? Date.now();
+  const standalone = opts.standalone ?? isStandaloneDisplay(doc.defaultView || globalThis.window);
   const label = riverSourceLabel(item, opts);
   const url = item.url ? safeContentUrl(item.url) : null;
   const badge = item.badge && item.badge.text ? item.badge : null;
@@ -1292,7 +1326,7 @@ export function newsRiverCard(item, opts = {}) {
   let headline;
   if (url) {
     headline = riverNode(doc, 'a', null, title);
-    riverExternalLink(headline, url);
+    riverExternalLink(headline, url, standalone);
     if (typeof opts.onOpen === 'function') {
       headline.addEventListener('click', (e) => {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -1328,7 +1362,7 @@ export function newsRiverCard(item, opts = {}) {
     if (readAt) {
       if (authors) by.appendChild(doc.createTextNode(' · '));
       const a = riverNode(doc, 'a', null, `Read at ${label} →`);
-      riverExternalLink(a, url);
+      riverExternalLink(a, url, standalone);
       by.appendChild(a);
     }
     children.push(by);
@@ -1391,7 +1425,13 @@ export function renderNewsRiver(container, items, opts = {}) {
       return a.i - b.i;
     });
 
-  const cardOpts = { ...opts, doc, now };
+  // Resolve the installed-app check once for the whole river, not per card.
+  const cardOpts = {
+    ...opts,
+    doc,
+    now,
+    standalone: opts.standalone ?? isStandaloneDisplay(doc.defaultView || globalThis.window),
+  };
   let lastDay = null;
   for (const { it, t } of sorted) {
     if (opts.groupByDay !== false) {
