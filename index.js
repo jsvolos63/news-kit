@@ -1095,17 +1095,27 @@ export const NEWS_RIVER_CSS = `
   border-radius: var(--nk-radius);
   padding: 14px 16px;
   box-shadow: var(--nk-shadow);
+  /* Rigid width: a card can never grow past its column. min-width: 0 lets
+     the flex item shrink below its content's min-content width, max-width
+     caps it, and overflow-wrap (inherited by every text block inside)
+     breaks long unbroken tokens (URLs, tickers) instead of letting one
+     word push the card — and the whole page — wider than the viewport. */
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .nk-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   font-size: 12px;
   color: var(--nk-muted);
   margin-bottom: 6px;
+  min-width: 0;
 }
 .nk-favicon { width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; }
-.nk-src { font-weight: 700; color: var(--nk-accent, var(--nk-ink)); }
+.nk-src { font-weight: 700; color: var(--nk-accent, var(--nk-ink)); min-width: 0; }
 .nk-dot { opacity: 0.5; }
 .nk-time { white-space: nowrap; }
 .nk-chip {
