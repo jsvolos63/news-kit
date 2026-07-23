@@ -1195,6 +1195,18 @@ export const NEWS_RIVER_CSS = `
 .nk-byline { font-size: 12px; color: var(--nk-muted); margin-top: 8px; }
 .nk-byline a { color: var(--nk-link); text-decoration: none; }
 .nk-empty { text-align: center; color: var(--nk-muted); padding: 40px 0; font-size: 14.5px; margin: 0; }
+/* Loading skeletons: fixed-height placeholder bars sized to match a text
+   card, so a cold load reserves the river's space up front and the swap to
+   real cards can't shift the page (the family's no-layout-drift rule). */
+.nk-skel-bar { background: var(--nk-chip); border-radius: 6px; }
+.nk-skel-meta { width: 42%; max-width: 180px; height: 12px; margin-bottom: 10px; }
+.nk-skel-title { width: 94%; height: 17px; margin-bottom: 7px; }
+.nk-skel-title-short { width: 63%; }
+.nk-skel-summary { width: 86%; height: 12px; margin-top: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .nk-skel .nk-skel-bar { animation: nk-skel-pulse 1.4s ease-in-out infinite; }
+}
+@keyframes nk-skel-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 `;
 
 // Style installation is idempotent per document (flag property, not a DOM
@@ -1230,11 +1242,31 @@ export function riverDayLabel(ts, now = Date.now()) {
   const t = toMs(ts);
   if (t == null) return null;
   const d = new Date(t);
-  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(new Date(now)) - startOfDay(d)) / 86400000);
+  const diffDays = riverDayDiff(d, now);
   if (diffDays <= 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+/** Surf-Tracker's coarse buckets for long-window feeds, where one divider per
+ *  day would drown the river: "Today" / "Yesterday" / "Earlier this week" /
+ *  "Earlier this month" / "Older". Same contract as riverDayLabel; pass it as
+ *  renderNewsRiver's `groupLabel` option for feeds spanning weeks or months. */
+export function riverCoarseGroupLabel(ts, now = Date.now()) {
+  const t = toMs(ts);
+  if (t == null) return null;
+  const diffDays = riverDayDiff(new Date(t), now);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return 'Earlier this week';
+  if (diffDays < 30) return 'Earlier this month';
+  return 'Older';
+}
+
+// Whole local calendar days between `d` and `now` (0 = same day).
+function riverDayDiff(d, now) {
+  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  return Math.round((startOfDay(new Date(now)) - startOfDay(d)) / 86400000);
 }
 
 // Element helper: children are nodes or strings; strings become TEXT nodes,
@@ -1454,9 +1486,10 @@ export function newsRiverCard(item, opts = {}) {
  * Render `items` into `container` as the river: styles installed (unless
  * opts.styles === false), newest-first (stable re-sort on publication time;
  * undated items keep their relative order at the end), day dividers dropped
- * wherever the local day changes (opts.groupByDay === false disables), and
- * opts.emptyMessage shown when there is nothing to render. All newsRiverCard
- * options apply.
+ * wherever the local day changes (opts.groupByDay === false disables;
+ * opts.groupLabel swaps the labeler — e.g. riverCoarseGroupLabel for
+ * long-window feeds), and opts.emptyMessage shown when there is nothing to
+ * render. All newsRiverCard options apply.
  */
 export function renderNewsRiver(container, items, opts = {}) {
   const doc = opts.doc || container.ownerDocument || globalThis.document;
@@ -1487,13 +1520,14 @@ export function renderNewsRiver(container, items, opts = {}) {
     now,
     standalone: opts.standalone ?? isStandaloneDisplay(doc.defaultView || globalThis.window),
   };
+  const groupLabel = typeof opts.groupLabel === 'function' ? opts.groupLabel : riverDayLabel;
   let lastDay = null;
   for (const { it, t } of sorted) {
     if (opts.groupByDay !== false) {
       // Undated items sort last; give them a neutral divider instead of
       // letting them sit under the previous (wrong) day's heading. A river
       // of ONLY undated items gets no divider at all.
-      const day = t != null ? riverDayLabel(t, now) : (lastDay != null ? (opts.undatedLabel || 'Earlier') : null);
+      const day = t != null ? groupLabel(t, now) : (lastDay != null ? (opts.undatedLabel || 'Earlier') : null);
       if (day && day !== lastDay) {
         container.appendChild(riverNode(doc, 'h2', 'nk-day', day));
         lastDay = day;
@@ -1503,3 +1537,434 @@ export function renderNewsRiver(container, items, opts = {}) {
   }
 }
 
+/**
+ * Paint `count` fixed-height placeholder cards into `container` — the
+ * standard cold-load state. Skeleton cards match a real text card's height,
+ * so the space the river will occupy is reserved before any data arrives and
+ * the swap to content (a later renderNewsRiver call over the same container)
+ * cannot shift the page. Use ONLY when there is nothing to show: a feed with
+ * cached/last-good items should keep them visible through a refresh instead
+ * (repainting content with skeletons is itself layout drift).
+ */
+export function renderNewsRiverSkeletons(container, opts = {}) {
+  const doc = opts.doc || container.ownerDocument || globalThis.document;
+  if (opts.styles !== false) ensureNewsRiverStyles(doc);
+  container.classList.add('nk-river');
+  container.replaceChildren();
+  const count = Number.isFinite(opts.count) ? Math.min(Math.max(Math.floor(opts.count), 1), 20) : 6;
+  for (let i = 0; i < count; i += 1) {
+    const card = riverNode(doc, 'article', 'nk-card nk-skel', riverNode(
+      doc,
+      'div',
+      'nk-main',
+      riverNode(doc, 'div', 'nk-skel-bar nk-skel-meta'),
+      riverNode(doc, 'div', 'nk-skel-bar nk-skel-title'),
+      riverNode(doc, 'div', 'nk-skel-bar nk-skel-title nk-skel-title-short'),
+      riverNode(doc, 'div', 'nk-skel-bar nk-skel-summary'),
+    ));
+    // Decorative only — screen readers should wait for the real cards.
+    card.setAttribute('aria-hidden', 'true');
+    container.appendChild(card);
+  }
+}
+
+
+// ===================== source-menu =====================
+// The source filter behind John's News and BearsMockDraft's Sources sheet,
+// extracted as the family's shared implementation (both apps carried a
+// byte-for-byte port of the same ~150 lines; "John's News source-menu
+// parity" was already a code comment in Bears). The "Art-Gallery two-control
+// model": every row carries two independent controls that never share a
+// code path —
+//
+//   1. The source NAME is a drill-down link: tapping it pins the river to
+//      just that source. A session-only view state (deliberately NOT
+//      persisted — reopening the app always starts unpinned), it wins over
+//      the multi-select while active, and re-tapping the pinned source
+//      clears it. The app should close its sheet on drill so the filtered
+//      river is visible right away.
+//   2. The CHECKBOX on the opposite side builds a multi-source selection:
+//      toggling keeps the sheet open, refilters the river live, and the
+//      selection persists (localStorage) until "All sources" clears it.
+//
+// The controller is container-agnostic: it renders the trigger button's
+// content and the sheet's rows, but the sheet itself (modal-kit dialog,
+// bottom sheet, popover) belongs to the app. Wire `onChange(reason)` and
+// close your sheet when `reason` is 'drill' or 'clear'; re-render your feed
+// through `filterItems()` on every change.
+
+/** Per-source story counts for menu rows and the trigger-button total.
+ *  Prototype-safe (null-prototype result; feed-controlled keys like
+ *  '__proto__' are just data). `sourceOf` overrides the default
+ *  `item.source` accessor. */
+export function countBySource(items, sourceOf) {
+  const of = typeof sourceOf === 'function'
+    ? sourceOf
+    : (it) => (it && it.source != null ? String(it.source) : '');
+  const counts = Object.create(null);
+  for (const it of items || []) {
+    const key = of(it);
+    if (!key) continue;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
+
+// The sheet usually lives OUTSIDE the .nk-river element, so the theme
+// variables are re-declared here at zero specificity for .nk-sources and the
+// trigger button — same palette, same override story (a consumer restyles
+// with a plain `.nk-sources { --nk-link: … }` rule).
+export const SOURCE_MENU_CSS = `
+:where(.nk-sources, .nk-source-btn) {
+  --nk-ink: #14171a;
+  --nk-muted: #5b6570;
+  --nk-line: #e3e7eb;
+  --nk-link: #0b5cad;
+  --nk-chip: #eef1f4;
+}
+@media (prefers-color-scheme: dark) {
+  :where(.nk-sources, .nk-source-btn) {
+    --nk-ink: #e8ebee;
+    --nk-muted: #9aa4ad;
+    --nk-line: #262c31;
+    --nk-link: #5aa9f5;
+    --nk-chip: #20262b;
+  }
+}
+.nk-sources { color: var(--nk-ink); }
+.nk-sources-heading {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--nk-muted);
+  margin: 0 0 6px;
+}
+.nk-source-all {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 4px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--nk-line);
+  font: inherit;
+  color: var(--nk-ink);
+  cursor: pointer;
+  text-align: left;
+}
+.nk-source-all[aria-pressed="true"] .nk-source-name { color: var(--nk-link); font-weight: 700; }
+.nk-source-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-bottom: 1px solid var(--nk-line);
+}
+.nk-source-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 13px 4px;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--nk-ink);
+  cursor: pointer;
+  text-align: left;
+}
+.nk-source-link:disabled { cursor: default; opacity: 0.45; }
+.nk-source-link .nk-source-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* reads as a hyperlink: accent color, deliberately no underline */
+  color: var(--nk-link);
+}
+.nk-source-count {
+  opacity: 0.65;
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.nk-source-go { margin-left: auto; opacity: 0.45; font-size: 18px; }
+.nk-source-row--active .nk-source-name { font-weight: 700; }
+.nk-source-row--active .nk-source-go { opacity: 0.9; color: var(--nk-link); }
+.nk-source-check { display: flex; align-items: center; padding: 0 6px 0 12px; cursor: pointer; }
+.nk-source-checkbox { width: 20px; height: 20px; accent-color: var(--nk-link); cursor: pointer; }
+.nk-source-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.nk-source-btn .nk-source-caret { opacity: 0.6; font-size: 11px; }
+`;
+
+const SOURCE_MENU_STYLE_FLAG = '__jfsNewsSourceMenuStyles';
+
+/** Install SOURCE_MENU_CSS into `doc` exactly once (same CSP-safe strategy
+ *  as ensureNewsRiverStyles: constructed stylesheet, <style> fallback). */
+export function ensureSourceMenuStyles(doc = globalThis.document) {
+  if (!doc) throw new Error('ensureSourceMenuStyles requires a DOM (browser).');
+  if (doc[SOURCE_MENU_STYLE_FLAG]) return;
+  doc[SOURCE_MENU_STYLE_FLAG] = true;
+  try {
+    const Sheet = (doc.defaultView || globalThis).CSSStyleSheet;
+    const sheet = new Sheet();
+    sheet.replaceSync(SOURCE_MENU_CSS);
+    doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+  } catch {
+    const style = doc.createElement('style');
+    style.textContent = SOURCE_MENU_CSS;
+    (doc.head || doc.documentElement).appendChild(style);
+  }
+}
+
+/**
+ * Build the family source-filter controller.
+ *
+ * Options:
+ *   storageKey    localStorage key for the persisted multi-select (omit for
+ *                 a session-only filter);
+ *   storage       injectable Storage (defaults to globalThis.localStorage;
+ *                 every access is guarded, so private-mode throws are
+ *                 non-fatal);
+ *   sourceLabels  map or fn — source key -> human label (same contract as
+ *                 the river's option of the same name);
+ *   heading       sheet heading text ('' suppresses; default 'Sources');
+ *   allLabel      the reset row's label (default 'All sources');
+ *   onChange(reason, menu)  fires after every state change: 'drill' |
+ *                 'toggle' | 'clear'. Re-render the feed through
+ *                 filterItems(); close the sheet on 'drill' and 'clear';
+ *   doc           Document override (tests).
+ *
+ * Returned API: state() -> { drill, selected: string[] }; isFiltered();
+ * filterItems(items, sourceOf?); setCounts(counts); drillTo(src);
+ * toggle(src); clear(); renderButton(btn); renderMenu(container);
+ * buttonState() -> { text, count, active } for apps with bespoke buttons.
+ */
+export function createSourceMenu(opts = {}) {
+  const doc = opts.doc || globalThis.document;
+  const storageKey = opts.storageKey || null;
+  const heading = opts.heading === undefined ? 'Sources' : String(opts.heading);
+  const allLabel = opts.allLabel === undefined ? 'All sources' : String(opts.allLabel);
+
+  function storageOf() {
+    if (opts.storage !== undefined) return opts.storage;
+    try {
+      return globalThis.localStorage;
+    } catch {
+      return null; // storage disabled (privacy mode) — filter is session-only
+    }
+  }
+
+  function loadSaved() {
+    if (!storageKey) return new Set();
+    try {
+      const s = storageOf();
+      const arr = JSON.parse((s && s.getItem(storageKey)) || '[]');
+      return new Set(Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []);
+    } catch {
+      return new Set(); // corrupt/unreadable saved state -> "all sources"
+    }
+  }
+
+  function save() {
+    if (!storageKey) return;
+    try {
+      const s = storageOf();
+      if (s) s.setItem(storageKey, JSON.stringify([...selected]));
+    } catch {
+      // storage disabled/full — non-fatal, filter still works this session
+    }
+  }
+
+  function labelOf(src) {
+    const labels = opts.sourceLabels;
+    if (typeof labels === 'function') return String(labels(src) || src);
+    if (labels && Object.prototype.hasOwnProperty.call(labels, src)) return String(labels[src]);
+    return String(src);
+  }
+
+  // A drill-down is session-only view state; the checkbox Set persists.
+  let drill = null;
+  const selected = loadSaved();
+  let counts = {};
+  let btnEl = null;
+  let menuEl = null;
+
+  function changed(reason) {
+    if (btnEl && btnEl.isConnected !== false) renderButton(btnEl);
+    if (menuEl && menuEl.isConnected !== false) renderMenu(menuEl);
+    if (typeof opts.onChange === 'function') opts.onChange(reason, api);
+  }
+
+  function drillTo(src) {
+    // Re-tapping the pinned source unpins it; the saved checkboxes are a
+    // separate concern and are left untouched (pure view change).
+    drill = drill === src ? null : src;
+    changed('drill');
+  }
+
+  function toggle(src) {
+    // Building a multi-select supersedes a single-source drill-down: drop
+    // the pin so the checkboxes' effect is visible immediately.
+    drill = null;
+    if (selected.has(src)) selected.delete(src);
+    else selected.add(src);
+    save();
+    changed('toggle');
+  }
+
+  function clear() {
+    drill = null;
+    selected.clear();
+    save();
+    changed('clear');
+  }
+
+  function filterItems(items, sourceOf) {
+    const of = typeof sourceOf === 'function'
+      ? sourceOf
+      : (it) => (it && it.source != null ? String(it.source) : '');
+    const list = items || [];
+    if (drill) return list.filter((it) => of(it) === drill);
+    if (selected.size) return list.filter((it) => selected.has(of(it)));
+    return list;
+  }
+
+  function totalCount() {
+    return Object.keys(counts).reduce((n, k) => n + (counts[k] || 0), 0);
+  }
+
+  function buttonState() {
+    const sel = [...selected];
+    const text = drill ? labelOf(drill)
+      : sel.length === 0 ? allLabel
+      : sel.length === 1 ? labelOf(sel[0])
+      : `${sel.length} sources`;
+    const count = drill ? (counts[drill] || 0)
+      : sel.length === 0 ? totalCount()
+      : sel.reduce((n, s) => n + (counts[s] || 0), 0);
+    return { text, count, active: !!drill || selected.size > 0 };
+  }
+
+  /** Fill a trigger button: label + count + caret, `.is-filtered` when a
+   *  filter is active. The button element (and its aria-haspopup/expanded
+   *  wiring) belongs to the app. */
+  function renderButton(btn) {
+    btnEl = btn;
+    if (!btn) return;
+    ensureSourceMenuStyles(btn.ownerDocument || doc);
+    btn.classList.add('nk-source-btn');
+    const d = btn.ownerDocument || doc;
+    const st = buttonState();
+    btn.replaceChildren(
+      d.createTextNode(st.text),
+      srcNode(d, 'span', 'nk-source-count', String(st.count)),
+      srcNode(d, 'span', 'nk-source-caret', '▾'),
+    );
+    btn.classList.toggle('is-filtered', st.active);
+  }
+
+  /** Build the sheet body: heading, the "All sources" reset row, then one
+   *  row per source (busiest first). Persisted selections missing from the
+   *  current counts render with count 0 so they can still be unchecked. */
+  function renderMenu(container) {
+    menuEl = container;
+    if (!container) return;
+    const d = container.ownerDocument || doc;
+    ensureSourceMenuStyles(d);
+    container.classList.add('nk-sources');
+    container.replaceChildren();
+
+    if (heading) container.appendChild(srcNode(d, 'h2', 'nk-sources-heading', heading));
+
+    const allActive = !drill && selected.size === 0;
+    const allRow = srcNode(
+      d,
+      'button',
+      'nk-source-all',
+      srcNode(d, 'span', 'nk-source-name', (allActive ? '✓ ' : '') + allLabel),
+      srcNode(d, 'span', 'nk-source-count', String(totalCount())),
+    );
+    allRow.setAttribute('type', 'button');
+    allRow.setAttribute('aria-pressed', String(allActive));
+    allRow.addEventListener('click', () => clear());
+    container.appendChild(allRow);
+
+    // Busiest first — the head of the list is what actually gets tapped.
+    const keys = Object.keys(counts);
+    selected.forEach((s) => { if (!keys.includes(s)) keys.push(s); });
+    keys.sort((a, b) => (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b));
+
+    for (const src of keys) {
+      const n = counts[src] || 0;
+      const drilled = drill === src;
+      const clickable = n > 0 || drilled;
+      const text = labelOf(src);
+
+      const link = srcNode(
+        d,
+        'button',
+        'nk-source-link',
+        srcNode(d, 'span', 'nk-source-name', text),
+        srcNode(d, 'span', 'nk-source-count', String(n)),
+        clickable ? srcNode(d, 'span', 'nk-source-go', '›') : null,
+      );
+      link.setAttribute('type', 'button');
+      link.setAttribute('aria-pressed', String(drilled));
+      link.setAttribute('aria-label', (drilled ? 'Stop showing only ' : 'Show only ') + text);
+      if (!clickable) link.disabled = true;
+      link.addEventListener('click', () => drillTo(src));
+      const go = link.querySelector('.nk-source-go');
+      if (go) go.setAttribute('aria-hidden', 'true');
+
+      const box = srcNode(d, 'input', 'nk-source-checkbox');
+      box.setAttribute('type', 'checkbox');
+      box.setAttribute('aria-label', `${text} — include in a multi-source selection`);
+      box.checked = selected.has(src);
+      box.addEventListener('change', () => toggle(src));
+      const check = srcNode(d, 'label', 'nk-source-check', box);
+      check.title = selected.has(src) ? 'Selected — tap to remove' : 'Tap to add to a multi-source selection';
+
+      const row = srcNode(d, 'div', `nk-source-row${drilled ? ' nk-source-row--active' : ''}`, link, check);
+      container.appendChild(row);
+    }
+  }
+
+  const api = {
+    state: () => ({ drill, selected: [...selected] }),
+    isFiltered: () => !!drill || selected.size > 0,
+    filterItems,
+    setCounts(c) {
+      counts = c || {};
+      if (btnEl) renderButton(btnEl);
+      if (menuEl && menuEl.isConnected) renderMenu(menuEl);
+    },
+    drillTo,
+    toggle,
+    clear,
+    renderButton,
+    renderMenu,
+    buttonState,
+  };
+  return api;
+}
+
+// Element helper for the source menu (same contract as riverNode: string
+// children become TEXT nodes, so labels/counts are never parsed as HTML).
+function srcNode(doc, tag, className, ...children) {
+  const node = doc.createElement(tag);
+  if (className) node.className = className;
+  for (const c of children) {
+    if (c == null || c === '') continue;
+    node.appendChild(typeof c === 'string' ? doc.createTextNode(c) : c);
+  }
+  return node;
+}
