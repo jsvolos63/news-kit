@@ -252,3 +252,20 @@ test('renderNewsRiver accepts a custom groupLabel (coarse dividers)', () => {
   const days = [...el.querySelectorAll('.nk-day')].map((d) => d.textContent);
   assert.deepEqual(days, ['Today', 'Earlier this week', 'Older']);
 });
+
+test('setCounts: a plain-object map cannot leak Object.prototype members', () => {
+  const menu = createSourceMenu({ doc: window.document, storage: null });
+  // A plain object (e.g. parsed JSON or a hand-built literal): a hostile
+  // source key like 'constructor' must read as count 0, not as the inherited
+  // Object.prototype member (which is truthy and renders as garbage).
+  menu.setCounts({ espn: 2 });
+  menu.drillTo('constructor');
+  assert.equal(menu.buttonState().count, 0);
+  assert.equal(typeof menu.buttonState().count, 'number');
+  menu.clear();
+  // And an own '__proto__' key (countBySource emits one for a feed source
+  // named '__proto__') survives the re-key as plain data.
+  menu.setCounts(countBySource([{ title: 'p', source: '__proto__' }]));
+  menu.drillTo('__proto__');
+  assert.equal(menu.buttonState().count, 1);
+});

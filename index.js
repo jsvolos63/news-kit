@@ -401,7 +401,15 @@ function stripTags(s) {
 
 function cap(s, n) {
   s = s || '';
-  return s.length > n ? s.slice(0, n) : s;
+  if (s.length <= n) return s;
+  // Never cut a surrogate pair in half: a cap landing between the high and
+  // low halves of an astral char (emoji in a headline) would leave a lone
+  // surrogate — an ill-formed string that turns into U+FFFD when encoded
+  // (JSON responses, TextEncoder). Back off one unit instead.
+  let end = n;
+  const c = s.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end -= 1;
+  return s.slice(0, end);
 }
 
 function escapeRe(s) {
@@ -1794,7 +1802,10 @@ export function createSourceMenu(opts = {}) {
   // A drill-down is session-only view state; the checkbox Set persists.
   let drill = null;
   const selected = loadSaved();
-  let counts = {};
+  // Null-prototype, like countBySource's result: source keys are
+  // feed-controlled, and a lookup such as counts['constructor'] on a plain
+  // object would find Object.prototype members instead of a count.
+  let counts = Object.create(null);
   let btnEl = null;
   let menuEl = null;
 
@@ -1943,7 +1954,10 @@ export function createSourceMenu(opts = {}) {
     isFiltered: () => !!drill || selected.size > 0,
     filterItems,
     setCounts(c) {
-      counts = c || {};
+      // Re-key onto a null-prototype object so an app passing a plain-object
+      // map (or parsed JSON) can't leak Object.prototype members into
+      // counts[src] lookups for hostile source keys ('constructor', …).
+      counts = Object.assign(Object.create(null), c || {});
       if (btnEl) renderButton(btnEl);
       if (menuEl && menuEl.isConnected) renderMenu(menuEl);
     },
