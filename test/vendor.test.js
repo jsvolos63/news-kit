@@ -105,6 +105,56 @@ test('global format: --pick narrows the surface and rejects unknown names', () =
   assert.match(bad.stderr, /definitelyNotAnExport/);
 });
 
+// Extract one global's surface map from a (possibly multi-global) output:
+// the entries between `globalThis.<name> = {` and its closing `};`.
+function globalMapNames(out, name) {
+  const m = out.match(new RegExp(`^globalThis\\.${name} = \\{\\n([^}]*)\\};`, 'm'));
+  assert.ok(m, `output must assign globalThis.${name}`);
+  return [...m[1].matchAll(/^  ([A-Za-z0-9_$]+): /gm)].map((x) => x[1]);
+}
+
+test('global format: repeatable --global emits several named globals over ONE kit body', () => {
+  const dir = freshDir();
+  const a = NAMES.slice(0, 2);
+  const b = NAMES.slice(2, 4);
+  const r = run(
+    ['--format', 'global', '--global', `GlobA:${a.join(',')}`, '--global', `GlobB:${b.join(',')}`, '--out', 'multi.js'],
+    dir
+  );
+  assert.equal(r.status, 0, r.stderr);
+  const file = join(dir, 'multi.js');
+  const out = readFileSync(file, 'utf8');
+  assert.equal(syntaxCheck(file).status, 0, 'multi-global output must parse as a classic script');
+  assert.ok(!/^export\s/m.test(out), 'no export keywords may survive');
+  assert.deepEqual([...globalMapNames(out, 'GlobA')].sort(), [...a].sort());
+  assert.deepEqual([...globalMapNames(out, 'GlobB')].sort(), [...b].sort());
+  // The whole point of the flag: one shared body, not the full bundle once
+  // per global — the emitted file must be barely bigger than a single-global
+  // build, never anywhere near two of them.
+  const single = run(['--format', 'global', '--name', 'G', '--pick', a.join(','), '--out', 'single.js'], dir);
+  assert.equal(single.status, 0, single.stderr);
+  const singleSize = readFileSync(join(dir, 'single.js'), 'utf8').length;
+  assert.ok(out.length < singleSize * 1.1, `multi-global (${out.length}) must not re-ship the body (single: ${singleSize})`);
+});
+
+test('global format: a single --global spelling emits exactly the legacy --name/--pick bytes', () => {
+  const dir = freshDir();
+  const picks = NAMES.slice(0, 2).join(',');
+  assert.equal(run(['--format', 'global', '--name', 'G', '--pick', picks, '--out', 'legacy.js'], dir).status, 0);
+  assert.equal(run(['--format', 'global', '--global', `G:${picks}`, '--out', 'spec.js'], dir).status, 0);
+  assert.equal(readFileSync(join(dir, 'spec.js'), 'utf8'), readFileSync(join(dir, 'legacy.js'), 'utf8'));
+});
+
+test('--global validation: global-format-only, exclusive with --name/--pick, bad picks rejected', () => {
+  const dir = freshDir();
+  assert.notEqual(run(['--format', 'esm', '--global', 'G', '--out', 'x.js'], dir).status, 0);
+  assert.notEqual(run(['--format', 'global', '--name', 'G', '--global', 'H', '--out', 'x.js'], dir).status, 0);
+  assert.notEqual(run(['--format', 'global', '--global', 'G', '--global', 'G', '--out', 'x.js'], dir).status, 0);
+  const bad = run(['--format', 'global', '--global', 'G:definitelyNotAnExport', '--out', 'x.js'], dir);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /definitelyNotAnExport/);
+});
+
 test('bare format: parseable, export-free, no global assignment', () => {
   const dir = freshDir();
   const r = run(['--format', 'bare', '--out', 'out.bare.js'], dir);

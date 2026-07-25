@@ -36,7 +36,22 @@ takes an IIFE global, optionally narrowed to just what it uses, e.g.
 BearsMockDraft's reader sanitizer
 (`--format global --name NewsKitSanitize --pick
 sanitizeHtmlToFragment,isSafeContentUrl
---out js/vendor/news-kit/sanitize-html.js`):
+--out js/vendor/news-kit/sanitize-html.js`).
+
+A page that needs **several** narrowed globals from this kit should vendor
+them from ONE file with the repeatable `--global Name[:pick,list]` flag —
+the kit body is emitted once and each global's surface map closes over it,
+instead of shipping the whole bundle once per global:
+
+```
+jfs-news-kit-vendor --format global \
+  --global NewsKitSanitize:sanitizeHtmlToFragment,isSafeContentUrl \
+  --global NewsKitRiver:renderNewsRiver,renderNewsRiverSkeletons,ensureNewsRiverStyles \
+  --out docs/js/vendor/news-kit.global.js
+```
+
+(`--global X:a,b` emits byte-identical output to `--name X --pick a,b`, so
+existing single-global invocations are unaffected.)
 
 ```json
 "devDependencies": {
