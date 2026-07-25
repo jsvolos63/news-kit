@@ -37,7 +37,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#d21858c050088bdb60b06c51620a20892f157abb"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#34c5bb05a7ee7fb9a97d632d08ee6dd46e24092e"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"
