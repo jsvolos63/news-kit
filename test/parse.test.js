@@ -69,3 +69,18 @@ test('respects max and handles junk input', () => {
   assert.deepEqual(parseFeed(null), []);
   assert.equal(parseFeed(RSS, { max: 1 }).length, 1);
 });
+
+test('caps never split a surrogate pair (emoji at the title boundary)', () => {
+  // 299 ASCII chars + an astral emoji: the 300-unit title cap would land
+  // between the emoji's high and low surrogates, leaving a lone surrogate.
+  const title = 'a'.repeat(299) + '\u{1F4A5}';
+  const xml = `<rss><channel><item><title>${title}</title>` +
+    '<link>https://example.com/s</link></item></channel></rss>';
+  const [item] = parseFeed(xml);
+  assert.equal(item.title.length, 299); // backed off, not cut mid-pair
+  assert.ok(!/[\uD800-\uDBFF]$/.test(item.title), 'no trailing lone surrogate');
+  // A title that fits is untouched, emoji intact.
+  const ok = parseFeed('<rss><channel><item><title>Boom \u{1F4A5}</title>' +
+    '<link>https://example.com/t</link></item></channel></rss>');
+  assert.equal(ok[0].title, 'Boom \u{1F4A5}');
+});
