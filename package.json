@@ -1,6 +1,6 @@
 {
   "name": "@jfs/news-kit",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "Shared, dependency-free news primitives (RSS parsing, dedup, classification, escaping, CORS proxy race, relative time, HTML sanitizing, news-river rendering) extracted from the JFS family of apps.",
   "type": "module",
   "license": "MIT",
@@ -34,10 +34,12 @@
     "bin"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "policy:sync": "jfs-sanitizer-policy-sync index.js",
+    "policy:check": "jfs-sanitizer-policy-sync --check index.js"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#933ab4010477c6e290305f2adca050bb90889a16"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#af482f0d357c326c102e2d62f6f7921c022c3c24"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"
