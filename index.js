@@ -794,10 +794,17 @@ const DEFAULT_ALLOWED = new Set([
   'PRE', 'CODE',
 ]);
 
+// Tags whose ENTIRE SUBTREE is dropped, never unwrapped. The list is
+// generated from the canonical @jfs sanitizer policy
+// (family/sanitizer-policy.json in @jfs/vendor-cli — also the source for
+// dom-kit's _BLOCKED_TAGS; UPPERCASE here because this sanitizer compares
+// DOM tagName) by `npm run policy:sync`; CI fails on drift.
 const DEFAULT_BLOCKED = new Set([
-  'SCRIPT', 'STYLE', 'IFRAME', 'NOSCRIPT', 'FORM', 'INPUT', 'BUTTON',
-  'SELECT', 'TEXTAREA', 'SVG', 'MATH', 'VIDEO', 'AUDIO', 'OBJECT', 'EMBED',
-  'LINK', 'META', 'BASE', 'TITLE', 'TEMPLATE',
+  // @jfs-sanitizer-policy:blocked-tags:start case=upper quote=single
+  'SCRIPT', 'STYLE', 'IFRAME', 'NOSCRIPT', 'FORM', 'INPUT', 'BUTTON', 'SELECT',
+  'TEXTAREA', 'SVG', 'MATH', 'VIDEO', 'AUDIO', 'OBJECT', 'EMBED', 'LINK',
+  'META', 'BASE', 'TITLE', 'TEMPLATE',
+  // @jfs-sanitizer-policy:blocked-tags:end
 ]);
 
 const DEFAULT_ATTRS_BY_TAG = {
@@ -807,16 +814,24 @@ const DEFAULT_ATTRS_BY_TAG = {
   TH: ['colspan', 'rowspan'],
 };
 
+// Strip ALL C0 controls + DEL anywhere in a URL before scheme checks:
+// browsers drop tab/newline/NUL from a URL before resolving its scheme, so
+// `java\tscript:` would otherwise slip past the scheme tests below. The regex
+// is generated from the canonical @jfs sanitizer policy
+// (family/sanitizer-policy.json in @jfs/vendor-cli — also the source for
+// dom-kit's copy) by `npm run policy:sync`; CI fails on drift.
+// @jfs-sanitizer-policy:url-control-chars:start const=URL_CONTROL_CHARS
+const URL_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
+// @jfs-sanitizer-policy:url-control-chars:end
+
 /** True if a URL is safe to keep as an href/src (blocks javascript:, data:, etc.).
  *  Permissive default: allows absolute http(s), protocol-relative and
  *  root-relative URLs. Pass a stricter validator via options.safeUrl when a
  *  consumer only wants absolute links. */
 export function isSafeContentUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  // Strip ALL C0 controls + DEL anywhere (browsers drop tab/newline/NUL from a
-  // URL before resolving its scheme, so `java\tscript:` and `javascript:`
-  // would otherwise slip past the scheme test), then trim surrounding spaces.
-  const trimmed = url.replace(/[\u0000-\u001F\u007F]/g, '').trim();
+  // Strip control chars (see URL_CONTROL_CHARS), then trim surrounding spaces.
+  const trimmed = url.replace(URL_CONTROL_CHARS, '').trim();
   if (/^(javascript|data|vbscript|file):/i.test(trimmed)) return false;
   if (/^https?:\/\//i.test(trimmed)) return true;
   if (/^\/\//.test(trimmed)) return true; // protocol-relative
@@ -834,7 +849,7 @@ export function isSafeContentUrl(url) {
  *  instead of the permissive default `isSafeContentUrl`. Pure. */
 export function strictSafeContentUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  const trimmed = url.replace(/[\u0000-\u001F\u007F]/g, '').trim();
+  const trimmed = url.replace(URL_CONTROL_CHARS, '').trim();
   return /^https?:\/\/[^/]/i.test(trimmed);
 }
 
