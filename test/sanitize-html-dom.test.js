@@ -96,6 +96,13 @@ test('foreign content (svg) is dropped with its subtree, not unwrapped', () => {
   assert.equal(out, '<p>a</p>');
 });
 
+test('a math element is dropped with its subtree', () => {
+  // MATH is in DEFAULT_BLOCKED (belt-and-braces alongside the namespace
+  // check), keeping the set a true mirror of dom-kit's _BLOCKED_TAGS.
+  const out = htmlOf(sanitizeHtmlToFragment('<p>a</p><math><mi>x</mi></math>'));
+  assert.equal(out, '<p>a</p>');
+});
+
 test('custom allowed/blocked lists override the defaults', () => {
   const out = htmlOf(sanitizeHtmlToFragment('<p>keep</p><b>drop-to-text</b>', { allowed: ['P'] }));
   assert.equal(out, '<p>keep</p>drop-to-text');
