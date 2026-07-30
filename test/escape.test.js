@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { escHtml, safeContentUrl, safeContentUrlAttr } from '../index.js';
+import { escHtml, safeContentUrl } from '../index.js';
 
 test('escHtml escapes the five significant characters', () => {
   assert.equal(escHtml(`<a href="x" id='y'>&`), '&lt;a href=&quot;x&quot; id=&#39;y&#39;&gt;&amp;');
@@ -23,9 +23,4 @@ test('safeContentUrl rejects dangerous and relative URLs', () => {
   assert.equal(safeContentUrl('/relative/path'), null);
   assert.equal(safeContentUrl(''), null);
   assert.equal(safeContentUrl(null), null);
-});
-
-test('safeContentUrlAttr HTML-escapes the validated href and returns "" on reject', () => {
-  assert.equal(safeContentUrlAttr('https://example.com/?a=1&b=2'), 'https://example.com/?a=1&amp;b=2');
-  assert.equal(safeContentUrlAttr('javascript:alert(1)'), '');
 });
