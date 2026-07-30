@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFeed, looksLikeFeed, countItems } from '../index.js';
+import { parseFeed, looksLikeFeed } from '../index.js';
 
 const RSS = `<?xml version="1.0"?>
 <rss version="2.0"><channel>
@@ -27,11 +27,10 @@ const ATOM = `<?xml version="1.0"?>
   </entry>
 </feed>`;
 
-test('looksLikeFeed / countItems', () => {
+test('looksLikeFeed', () => {
   assert.equal(looksLikeFeed(RSS), true);
+  assert.equal(looksLikeFeed(ATOM), true);
   assert.equal(looksLikeFeed('<html></html>'), false);
-  assert.equal(countItems(RSS), 2);
-  assert.equal(countItems(ATOM), 1);
 });
 
 test('parses RSS items (regex path in Node) with entities + CDATA', () => {

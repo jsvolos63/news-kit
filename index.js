@@ -75,23 +75,20 @@ function safeFromCodePoint(cp) {
 //   - JFS-Sports      helpers.js          (escapeHtml, sanitizeUrl, sanitizeHref)
 //   - BearsMockDraft  js/shared.js        (escapeText, escapeAttr, safeUrl)
 //
-// JFS-Sports is the only one that correctly splits the two URL use-cases, so
-// that distinction is preserved here:
+// JFS-Sports is the only one that correctly splits the two URL use-cases, and
+// the DOM-API side of that split is preserved here:
 //   - safeContentUrl()     -> normalized href string, NOT HTML-escaped. Use for
 //                             the DOM APIs (el.setAttribute('href', ...),
 //                             el.href, el.src) where the browser stores the
 //                             value verbatim; escaping would double-encode `&`.
-//   - safeContentUrlAttr() -> HTML-escaped href, ready to drop into an
-//                             innerHTML template literal:
-//                             `<a href="${safeContentUrlAttr(u)}">`.
 //
 // FAMILY NAMING RULE: the generic DOM-safety names (escapeHtml, safeUrl,
 // sanitizeUrl, sanitizeHref, sanitizeHtml) belong to @jfs/dom-kit, with
 // dom-kit's permissive contracts (e.g. its safeUrl returns '#' on reject and
 // allows mailto:). news-kit's guards are strict feed-content validators, so
-// they live under content-scoped names (safeContentUrl, safeContentUrlAttr,
-// isSafeContentUrl, sanitizeHtmlToFragment) — exporting the same name with a
-// different contract from two kits is deliberately avoided.
+// they live under content-scoped names (safeContentUrl, isSafeContentUrl,
+// sanitizeHtmlToFragment) — exporting the same name with a different contract
+// from two kits is deliberately avoided.
 
 /** Escape the five HTML-significant characters. Safe for text nodes and for
  *  values placed inside either single- or double-quoted attributes. */
@@ -117,14 +114,6 @@ export function safeContentUrl(u) {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
   return parsed.href;
-}
-
-/** Same validation as safeContentUrl(), but HTML-escaped for `innerHTML`
- *  interpolation. Returns '' (not null) so it slots cleanly into a template
- *  literal. */
-export function safeContentUrlAttr(u) {
-  const href = safeContentUrl(u);
-  return href ? escHtml(href) : '';
 }
 
 // ===================== classify =====================
@@ -258,15 +247,6 @@ export function parseFeed(xml, opts = {}) {
 export function looksLikeFeed(body) {
   return typeof body === 'string'
     && (body.includes('<rss') || body.includes('<feed') || body.includes('<rdf:RDF'));
-}
-
-/** Count <item>/<entry> without a full parse — used by the proxy race to reject
- *  empty bodies returned by consent gates. */
-export function countItems(body) {
-  if (typeof body !== 'string') return 0;
-  const rss = body.match(/<item[\s>]/gi);
-  const atom = body.match(/<entry[\s>]/gi);
-  return (rss ? rss.length : 0) + (atom ? atom.length : 0);
 }
 
 // ---- DOMParser path -------------------------------------------------------
@@ -559,161 +539,6 @@ export function mergeItems(prevItems, freshItems, opts = {}) {
   return merged.slice(0, cap);
 }
 
-// ===================== proxy =====================
-// CORS proxy race with a delayed own-origin fallback.
-//
-// Generalizes Surf-Tracker's client strategy (docs/js/05-fetch.js): the flaky
-// free public proxies race immediately, and the app's own serverless proxy
-// joins late so it only costs an invocation when the free ones fail. First
-// non-empty body wins; the losers are aborted.
-//
-// SECURITY NOTE: public proxies leak every fetched URL to a third party and are
-// rate-limited and frequently down. The recommended end state is an own-origin
-// proxy with an SSRF host allowlist (market-monitor's netlify/functions/
-// rss-proxy.js is the model). Pass it as `originProxy` and, once it's reliable,
-// shrink or drop `proxies`.
-//
-// For exactly that reason the public proxies are NOT a silent default: a
-// consumer must opt in by passing `proxies` (PUBLIC_CORS_PROXIES is exported
-// for that) and/or `originProxy`. Calling proxyRace with neither throws.
-
-
-/** The public CORS proxies historically hardcoded across Bears/JFS/Surf.
- *  OPT-IN ONLY — see the security note above. */
-export const PUBLIC_CORS_PROXIES = [
-  (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
-  (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-  (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-];
-// Back-compat alias for the old name (no consumer shipped against it yet, but
-// the vendored copies exposed it).
-export { PUBLIC_CORS_PROXIES as DEFAULT_PROXIES };
-
-/**
- * Fetch `targetUrl` through whichever proxy returns a usable feed first.
- * At least one of `proxies` / `originProxy` is required — public CORS proxies
- * are an explicit opt-in (pass PUBLIC_CORS_PROXIES), never a silent default.
- * @param {string} targetUrl
- * @param {{
- *   proxies?: Array<(u:string)=>string>,
- *   originProxy?: ((u:string)=>string)|null,
- *   originDelayMs?: number,
- *   timeoutMs?: number,
- *   minItems?: number,
- *   fetchImpl?: typeof fetch,
- *   acceptBody?: (body:string)=>boolean,
- * }} [opts]
- * @returns {Promise<{ text: string, via: string }>}
- * @throws when every transport fails or returns an empty/unusable body.
- */
-export async function proxyRace(targetUrl, opts = {}) {
-  const proxies = opts.proxies || [];
-  if (proxies.length === 0 && !opts.originProxy) {
-    throw new Error(
-      'proxyRace: pass `proxies` (e.g. PUBLIC_CORS_PROXIES — an explicit privacy opt-in) and/or an own-origin `originProxy`',
-    );
-  }
-  const timeoutMs = opts.timeoutMs ?? 8000;
-  const minItems = opts.minItems ?? 1;
-  const fetchImpl = opts.fetchImpl || globalThis.fetch;
-  const accept = opts.acceptBody || ((body) => countItems(body) >= minItems);
-  if (typeof fetchImpl !== 'function') {
-    throw new Error('proxyRace: no fetch implementation available');
-  }
-
-  const controller = new AbortController();
-  const transports = proxies.map((p, i) => ({ build: p, label: `proxy:${i}`, delay: 0 }));
-  if (opts.originProxy) {
-    transports.push({ build: opts.originProxy, label: 'origin', delay: opts.originDelayMs ?? 1500 });
-  }
-
-  const attempts = transports.map((t) => attempt(t));
-
-  // Resolve on the first acceptable body; only reject once ALL have failed.
-  return new Promise((resolve, reject) => {
-    let remaining = attempts.length;
-    let settled = false;
-    let lastErr = null;
-    for (const a of attempts) {
-      a.then(
-        (res) => {
-          if (settled) return;
-          settled = true;
-          controller.abort();
-          resolve(res);
-        },
-        (err) => {
-          lastErr = err;
-          remaining -= 1;
-          if (!settled && remaining === 0) {
-            reject(lastErr || new Error('proxyRace: all transports failed'));
-          }
-        },
-      );
-    }
-  });
-
-  async function attempt(t) {
-    if (t.delay) await sleep(t.delay, controller.signal);
-    // Per-attempt timeout. AbortSignal.timeout when available; otherwise a
-    // hand-rolled controller so the timeout still applies on older engines
-    // (previously the timeout was silently dropped there).
-    let localTimeout;
-    let timeoutId = null;
-    if (typeof AbortSignal.timeout === 'function') {
-      localTimeout = AbortSignal.timeout(timeoutMs);
-    } else {
-      const tc = new AbortController();
-      timeoutId = setTimeout(() => tc.abort(), timeoutMs);
-      localTimeout = tc.signal;
-    }
-    try {
-      const signal = mergeSignals(controller.signal, localTimeout);
-      const res = await fetchImpl(t.build(targetUrl), { signal });
-      if (!res || !res.ok) throw new Error(`${t.label}: HTTP ${res ? res.status : 'no-response'}`);
-      const text = await res.text();
-      if (!accept(text)) throw new Error(`${t.label}: empty/unusable body`);
-      return { text, via: t.label };
-    } finally {
-      if (timeoutId !== null) clearTimeout(timeoutId);
-    }
-  }
-}
-
-function sleep(ms, signal) {
-  return new Promise((resolve, reject) => {
-    const id = setTimeout(resolve, ms);
-    if (signal) {
-      if (signal.aborted) {
-        clearTimeout(id);
-        reject(new Error('aborted'));
-        return;
-      }
-      signal.addEventListener('abort', () => {
-        clearTimeout(id);
-        reject(new Error('aborted'));
-      }, { once: true });
-    }
-  });
-}
-
-function mergeSignals(a, b) {
-  if (!b) return a;
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any([a, b]);
-  // Fallback: chain BOTH aborts into a fresh controller. (This used to
-  // `return a`, silently dropping b — the per-attempt timeout signal.)
-  const merged = new AbortController();
-  const onAbort = () => merged.abort();
-  for (const s of [a, b]) {
-    if (s.aborted) {
-      merged.abort();
-      break;
-    }
-    s.addEventListener('abort', onAbort, { once: true });
-  }
-  return merged.signal;
-}
-
 // ===================== time =====================
 // Relative time formatting ("just now", "3m ago", "2h ago", "Jun 16").
 //
@@ -838,19 +663,6 @@ export function isSafeContentUrl(url) {
   if (/^\//.test(trimmed)) return true; // root-relative
   // Anything else carrying a scheme is rejected; bare relative text is allowed.
   return !/^[a-z][a-z0-9+.-]*:/i.test(trimmed);
-}
-
-/** Strict URL validator for readers rendering fully untrusted extracted HTML:
- *  accepts ONLY absolute `http(s)://host…` URLs. Rejects protocol-relative
- *  (`//host`), origin-relative (`/path`) and bare-relative references so a
- *  hostile link can't resolve against the reader's own origin. Recommended:
- *  such readers should pass this as `options.safeUrl` to
- *  `sanitizeHtmlToFragment` (and use it directly for standalone link checks)
- *  instead of the permissive default `isSafeContentUrl`. Pure. */
-export function strictSafeContentUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  const trimmed = url.replace(URL_CONTROL_CHARS, '').trim();
-  return /^https?:\/\/[^/]/i.test(trimmed);
 }
 
 const DANGEROUS_SCHEME_RE = /(javascript|data|vbscript|file|blob):/;
