@@ -220,9 +220,51 @@ test('--check: passes in sync, fails on drift, fails when missing', () => {
   assert.match(drift.stderr, /out of sync/);
 });
 
-test('argument validation: bad format, missing --out, --pick outside global', () => {
+test('argument validation: bad format, missing --out, unknown --pick name', () => {
   const dir = freshDir();
   assert.notEqual(run(['--format', 'nope', '--out', 'x.js'], dir).status, 0);
   assert.notEqual(run(['--format', 'esm'], dir).status, 0);
-  assert.notEqual(run(['--format', 'esm', '--out', 'x.js', '--pick', 'a'], dir).status, 0);
+
+  // `a` is rejected because it is not an export of this kit — NOT because
+  // --pick is unavailable here. vendor-cli 0.11.0 refused --pick outside
+  // global/cjs entirely, which is what forced three consumers to carry an
+  // `overrides` entry pinning this kit's own CLI. Pin the reason, so a pin
+  // regression can't hide behind the same exit code.
+  const unknown = run(['--format', 'esm', '--out', 'x.js', '--pick', 'a'], dir);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /not exported by @jfs\/news-kit/);
+});
+
+test('--pick narrows an esm build (consumers need no vendor-cli override)', () => {
+  const dir = freshDir();
+
+  const full = run(['--format', 'esm', '--out', 'full.js'], dir);
+  assert.equal(full.status, 0, full.stderr);
+
+  const picked = run(['--format', 'esm', '--out', 'picked.js', '--pick', 'escapeHtml'], dir);
+  assert.equal(picked.status, 0, picked.stderr);
+
+  const pickedFile = join(dir, 'picked.js');
+  const out = readFileSync(pickedFile, 'utf8');
+  assert.equal(syntaxCheck(pickedFile).status, 0, 'narrowed esm output must parse');
+
+  // esm's aggregate export list is `export {\n  name,\n};` — bare names, not
+  // the `name: value` pairs the global/cjs surface maps use.
+  const idx = out.indexOf('export {');
+  assert.notEqual(idx, -1, 'narrowed esm output must carry an aggregate export list');
+  const exported = [...out.slice(idx).matchAll(/^ {2}([A-Za-z0-9_$]+)(?: as [A-Za-z0-9_$]+)?,$/gm)]
+    .map((m) => m[1]);
+  assert.deepEqual(
+    exported.sort(),
+    ['escapeHtml'],
+    'a narrowed esm build must expose exactly the picked exports',
+  );
+
+  // The body — not just the surface map — has to shrink, or the narrowed
+  // copy is shipped bytes the consumer never calls.
+  const fullBytes = readFileSync(join(dir, 'full.js'), 'utf8').length;
+  assert.ok(
+    out.length < fullBytes / 4,
+    `narrowed esm build must be tree-shaken (${out.length} vs ${fullBytes} bytes)`,
+  );
 });

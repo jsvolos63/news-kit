@@ -14,8 +14,9 @@ runtime dependencies, single-file bundle (`index.js`).
 > `vendor:sync` invocation at `jfs-news-kit-vendor`, not by editing call
 > sites. The old repos remain in place until every consumer has moved.
 > Because the vendoring CLI tree-shakes a narrowed build (`@jfs/vendor-cli`
-> 0.11.0+), taking only `escapeHtml` from this kit costs ~5 KB, not the
-> whole bundle — see [Vendored build sizes](#vendored-build-sizes).
+> 0.11.0+ for `global`/`cjs`, 0.12.0+ for `esm`), taking only `escapeHtml`
+> from this kit costs ~5 KB, not the whole bundle — see
+> [Vendored build sizes](#vendored-build-sizes).
 
 ## What's in it
 
@@ -69,19 +70,36 @@ lowercase set is derived from it, so the two can no longer drift.
 
 ### Vendored build sizes
 
-Generated from v0.12.0 with `@jfs/vendor-cli` 0.11.0 (`--format global`,
-unminified, comments included):
+Generated from v0.12.0 with `@jfs/vendor-cli` 0.12.0 (unminified, comments
+included). `--format global`:
 
 | Pick | Bytes |
 |---|---|
-| `escapeHtml` | 5,512 |
-| `createModal` | 27,659 |
+| `escapeHtml` | 5,496 |
+| `byId`, `elem` (Weather / FlightCheck) | 6,173 |
+| `createModal` | 27,645 |
 | `NewsKitSanitize` + `NewsKitRiver` (Surf-Tracker's two globals) | 38,962 |
-| sanitize + river + source-menu + `createModal` + `escapeHtml` | 81,791 |
-| full 50-export surface (unshaken) | 114,378 |
+| sanitize + river + source-menu + `createModal` + `escapeHtml` | 79,709 |
+| full 50-export surface (unshaken) | 114,372 |
+
+`--format esm` — narrowed since vendor-cli 0.12.0, so the ESM consumers stop
+shipping the full body:
+
+| Pick | Bytes |
+|---|---|
+| `escapeHtml` | 5,520 |
+| `escapeHtml`, `safeUrl`, `safeImageUrl`, `sanitizeHtml` (Art-Gallery-) | 16,329 |
+| market-monitor's 9 exports | 70,095 |
+| John's News' 10 exports | 90,018 |
+| full 50-export surface (unshaken) | 113,067 |
 
 Every narrowed build keeps the sanitizer-policy marked regions, so
 `jfs-sanitizer-policy-sync --check` still gates the vendored copy.
+
+Moving the pin from vendor-cli 0.11.0 to 0.12.0 emits **byte-identical**
+output for every `global`/`cjs` invocation and for a full-surface `esm`
+copy, so existing consumers see no `vendor:check` drift from the bump alone
+— it only adds narrowing to `--format esm`.
 
 ## Using it
 
@@ -109,6 +127,26 @@ jfs-news-kit-vendor --format global \
 
 (`--global X:a,b` emits byte-identical output to `--name X --pick a,b`, so
 existing single-global invocations are unaffected.)
+
+`--pick` narrows `--format esm` too, so a buildless consumer that imports the
+vendored copy as a browser ES module ships only what it uses.
+
+### No `overrides` workaround needed
+
+`jfs-news-kit-vendor` is a shim over whatever `@jfs/vendor-cli` resolves
+**from inside this package**, so the CLI you get is fixed by this kit's own
+`dependencies` pin. While that pin was 0.11.0 — which rejected `--pick`
+outside `--format global`/`cjs` — ESM consumers had to force the resolution
+from the outside:
+
+```json
+"overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…" } }
+```
+
+The pin is 0.12.0 as of this release, so **that entry can be deleted once you
+re-pin `@jfs/news-kit` to this commit or later.** No override is needed even
+if your own tree carries an older `@jfs/vendor-cli` at top level: npm nests
+the correct copy under `@jfs/news-kit` and the shim resolves the nested one.
 
 ### Migrating off @jfs/dom-kit / @jfs/modal-kit
 
