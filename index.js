@@ -78,28 +78,51 @@ function safeFromCodePoint(cp) {
 // JFS-Sports is the only one that correctly splits the two URL use-cases, and
 // the DOM-API side of that split is preserved here:
 //   - safeContentUrl()     -> normalized href string, NOT HTML-escaped. Use for
-//                             the DOM APIs (el.setAttribute('href', ...),
-//                             el.href, el.src) where the browser stores the
-//                             value verbatim; escaping would double-encode `&`.
+//                             the DOM APIs (setAttribute('href', ...), .href,
+//                             .src) where the browser stores the value
+//                             verbatim; escaping would double-encode `&`.
 //
-// FAMILY NAMING RULE: the generic DOM-safety names (escapeHtml, safeUrl,
-// sanitizeUrl, sanitizeHref, sanitizeHtml) belong to @jfs/dom-kit, with
-// dom-kit's permissive contracts (e.g. its safeUrl returns '#' on reject and
-// allows mailto:). news-kit's guards are strict feed-content validators, so
-// they live under content-scoped names (safeContentUrl, isSafeContentUrl,
-// sanitizeHtmlToFragment) — exporting the same name with a different contract
-// from two kits is deliberately avoided.
+// ABSORBED FROM @jfs/dom-kit (v0.3.3): dom-kit's `escapeHtml` and news-kit's
+// `escHtml` were VERIFIED byte-identical in behavior — a differential run over
+// 85,683 inputs (every code unit 0x00–0xFFFF, astral characters, lone
+// surrogates, null/undefined/non-strings, 20k fuzzed strings) produced zero
+// mismatches, so the two implementations were collapsed into ONE. dom-kit's
+// single-pass table+regex form survives; `escHtml` and `escAttr` are aliases
+// of it, so every consumer's existing import keeps working.
+//
+// The URL guards were NOT collapsed: all fifteen pairs among safeUrl /
+// safeImageUrl / sanitizeUrl / sanitizeHref / safeContentUrl / isSafeContentUrl
+// differ on real inputs (reject sentinel `#` vs `''` vs `null` vs `false`,
+// relative-URL policy, `new URL()` normalization, HTML-escaping of `&`,
+// data:image and blob: allowances). They keep their own implementations and
+// their own contracts — see the `dom` section below for the guard-by-guard
+// comparison.
+
+// All five HTML-significant characters. The textContent → innerHTML trick
+// only escapes <, >, & — quotes are left untouched, which is unsafe in
+// attribute contexts. Replacing all five explicitly keeps the helper
+// usable as `value="${escapeHtml(x)}"` too, not just inside text nodes.
+const HTML_ESCAPES = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+const HTML_ESCAPE_REGEX = /[&<>"']/g;
 
 /** Escape the five HTML-significant characters. Safe for text nodes and for
- *  values placed inside either single- or double-quoted attributes. */
-export function escHtml(s) {
-  return (s == null ? '' : String(s))
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+ *  values placed inside either single- or double-quoted attributes. Coerces
+ *  non-string values via String() and treats null / undefined as empty so
+ *  callers don't have to guard upstream. */
+export function escapeHtml(str) {
+  if (str == null) return '';
+  const s = typeof str === 'string' ? str : String(str);
+  return s.replace(HTML_ESCAPE_REGEX, (ch) => HTML_ESCAPES[ch]);
 }
+// Aliases — market-monitor uses escHtml/escAttr, JFS-Sports uses escapeHtml,
+// news-kit's own consumers use escHtml. One implementation, three names.
+export { escapeHtml as escHtml, escapeHtml as escAttr };
 
 /** Validate a URL and return its normalized absolute href, or null when it is
  *  not a syntactically valid http(s) URL. Blocks javascript:, data:, vbscript:,
@@ -272,17 +295,21 @@ function parseWithDom(xml) {
   return out;
 
   function textOf(node, tags) {
+    // Local bindings deliberately avoid the name `el`: the tree-shaker roots a
+    // top-level declaration by identifier occurrence, so a local `el` here
+    // would drag the exported `el()` element builder into every narrowed
+    // vendored build that picks parseFeed.
     for (const t of tags) {
-      const el = node.querySelector(t);
-      if (el && el.textContent) return el.textContent;
+      const found = node.querySelector(t);
+      if (found && found.textContent) return found.textContent;
     }
     return '';
   }
   function nsText(node, local) {
     // content:encoded etc. — match by local name regardless of prefix binding.
     const els = node.getElementsByTagName('*');
-    for (const el of els) {
-      if (el.localName === local && el.textContent) return el.textContent;
+    for (const cand of els) {
+      if (cand.localName === local && cand.textContent) return cand.textContent;
     }
     return '';
   }
@@ -621,9 +648,12 @@ const DEFAULT_ALLOWED = new Set([
 
 // Tags whose ENTIRE SUBTREE is dropped, never unwrapped. The list is
 // generated from the canonical @jfs sanitizer policy
-// (family/sanitizer-policy.json in @jfs/vendor-cli — also the source for
-// dom-kit's _BLOCKED_TAGS; UPPERCASE here because this sanitizer compares
-// DOM tagName) by `npm run policy:sync`; CI fails on drift.
+// (family/sanitizer-policy.json in @jfs/vendor-cli) by `npm run policy:sync`;
+// CI fails on drift. UPPERCASE here because this sanitizer compares DOM
+// tagName. This is now the kit's ONLY copy of the region: the absorbed
+// dom-kit sanitizer's lowercase `_BLOCKED_TAGS` is DERIVED from this set (see
+// the `dom` section) rather than carrying a second marked region, so the two
+// lists cannot drift from each other at all.
 const DEFAULT_BLOCKED = new Set([
   // @jfs-sanitizer-policy:blocked-tags:start case=upper quote=single
   'SCRIPT', 'STYLE', 'IFRAME', 'NOSCRIPT', 'FORM', 'INPUT', 'BUTTON', 'SELECT',
@@ -641,10 +671,13 @@ const DEFAULT_ATTRS_BY_TAG = {
 
 // Strip ALL C0 controls + DEL anywhere in a URL before scheme checks:
 // browsers drop tab/newline/NUL from a URL before resolving its scheme, so
-// `java\tscript:` would otherwise slip past the scheme tests below. The regex
-// is generated from the canonical @jfs sanitizer policy
-// (family/sanitizer-policy.json in @jfs/vendor-cli — also the source for
-// dom-kit's copy) by `npm run policy:sync`; CI fails on drift.
+// `java\tscript:` would otherwise slip past the scheme tests below, and
+// control characters embedded in an accepted URL must not survive into the
+// returned value either. The regex is generated from the canonical @jfs
+// sanitizer policy (family/sanitizer-policy.json in @jfs/vendor-cli) by
+// `npm run policy:sync`; CI fails on drift. This is the kit's ONLY copy — the
+// absorbed dom-kit guards (safeUrl / safeImageUrl, `dom` section below) share
+// this constant instead of carrying a second marked region.
 // @jfs-sanitizer-policy:url-control-chars:start const=URL_CONTROL_CHARS
 const URL_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 // @jfs-sanitizer-policy:url-control-chars:end
@@ -774,8 +807,10 @@ function appendCleanChildren(parent, target, doc, cfg, depth) {
       appendCleanChildren(node, target, doc, cfg, depth + 1);
       continue;
     }
-    const el = buildAllowed(node, tag, doc, cfg, depth);
-    if (el) target.appendChild(el);
+    // Named `built`, not `el` — see the note in parseFeed's textOf: a local
+    // `el` would false-root the exported `el()` builder in narrowed builds.
+    const built = buildAllowed(node, tag, doc, cfg, depth);
+    if (built) target.appendChild(built);
     else appendCleanChildren(node, target, doc, cfg, depth + 1); // e.g. <img> w/ unsafe src → unwrap
   }
 }
@@ -1808,6 +1843,351 @@ function srcNode(doc, tag, className, ...children) {
     node.appendChild(typeof c === 'string' ? doc.createTextNode(c) : c);
   }
   return node;
+}
+
+// ===================== dom =====================
+// ABSORBED FROM @jfs/dom-kit (v0.3.3) — the generic DOM / escaping / URL-guard
+// primitives, retired into this kit so the family stops paying for a separate
+// repo, CI, pin and vendoring flow for 13 exports that overlapped this one.
+//
+// Two groups:
+//
+//   Group A — PURE (no DOM): the escaper (see the `escape` section — ONE
+//     implementation now, exported as escapeHtml / escHtml / escAttr) plus the
+//     URL guards safeUrl, safeImageUrl, sanitizeUrl, sanitizeHref.
+//
+//   Group B — DOM-dependent: el / elem, byId, $ / $$, sanitizeHtml. These
+//     reach for `document` / `DOMParser`, which the browser supplies at
+//     runtime (and a DOM shim supplies in tests). This module imports
+//     NOTHING — it stays dependency-free at install time.
+//
+// Compatibility-superset rule: the sibling apps grew slightly different
+// helpers for the same idea, so they adopt the kit by changing IMPORT PATHS,
+// not call sites. That means we keep BOTH URL-guard fallbacks (safeUrl → "#",
+// sanitizeUrl → "") byte-for-byte like their origins.
+//
+// WHY THE URL GUARDS ARE NOT DEDUPLICATED. Six guards now live in this file
+// and NONE of them are interchangeable — a differential run over a shared
+// corpus found all fifteen pairs differing on real inputs:
+//
+//   safeUrl(u)           -> string, rejects to "#". Allows http(s), mailto:,
+//                           protocol-relative (rewritten to https:), and
+//                           relative "/", "#", "?". For href attributes.
+//   safeImageUrl(u)      -> string, rejects to "". Allows http(s),
+//                           protocol-relative (→ https:), blob:, data:image/*.
+//                           NO relative paths. For <img src> ONLY.
+//   sanitizeUrl(u)       -> string, rejects to "". new URL() + http(s) only,
+//                           returns the normalized href HTML-ESCAPED
+//                           (`&` → `&amp;`). For innerHTML interpolation.
+//   sanitizeHref(u)      -> string, rejects to "". Same parse/whitelist as
+//                           sanitizeUrl but NOT HTML-escaped. For setAttribute
+//                           / .href / .src, where escaping would over-encode.
+//   safeContentUrl(u)    -> string|null, rejects to null. Same parse/whitelist
+//                           as sanitizeHref, but ALSO requires a string input
+//                           (`safeContentUrl(new URL(...))` → null, whereas
+//                           `sanitizeHref(new URL(...))` → the href) and
+//                           signals reject with null rather than "".
+//   isSafeContentUrl(u)  -> boolean. Permissive feed-content predicate: allows
+//                           absolute http(s), protocol-relative, root-relative
+//                           AND bare relative text; rejects anything else
+//                           carrying a scheme.
+//
+// Concrete divergences that make a silent unification a security/behavior
+// change rather than a refactor:
+//   "//evil.com/x"  → safeUrl "https://evil.com/x" | safeImageUrl
+//                     "https://evil.com/x" | sanitizeUrl "" | sanitizeHref ""
+//                     | safeContentUrl null | isSafeContentUrl true
+//   "/root/rel"     → safeUrl "/root/rel" | safeImageUrl "" | isSafeContentUrl
+//                     true | the three URL()-parsing guards reject
+//   "mailto:a@b.c"  → safeUrl "mailto:a@b.c" | everything else rejects
+//   "data:image/png;base64,AAA" → safeImageUrl keeps it | everything else
+//                     rejects (this is exactly why safeImageUrl is <img>-only)
+//   "http://x/?a=1&b=2" → sanitizeUrl "…&amp;b=2" | sanitizeHref /
+//                     safeContentUrl "…&b=2"
+//
+// The ONE pair that WAS collapsed is the escaper: dom-kit's escapeHtml and
+// news-kit's escHtml agreed on all 85,683 differential inputs, so there is a
+// single implementation with both names (plus escAttr) exported.
+
+/**
+ * Art-Gallery URL guard. Allows http(s):, mailto:, protocol-relative
+ * (`//` → https:), and relative (`/`, `#`, `?`). Everything else — including
+ * javascript:, data:, vbscript: — collapses to `"#"` so a link never fires a
+ * hostile scheme. Shares the policy-owned URL_CONTROL_CHARS strip with the
+ * feed-content guards above.
+ */
+export function safeUrl(url) {
+  if (url == null) return '#';
+  const s = String(url).replace(URL_CONTROL_CHARS, '').trim();
+  if (!s) return '#';
+  // Protocol-relative is treated as https. This check has to run before the
+  // single-slash check below, otherwise "//evil.com" would return verbatim
+  // and resolve against the current scheme (file://, http://, etc.).
+  if (s.startsWith('//')) return 'https:' + s;
+  // Relative paths and fragments are safe.
+  if (s.startsWith('/') || s.startsWith('#') || s.startsWith('?')) return s;
+  const lower = s.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('mailto:')) {
+    return s;
+  }
+  return '#';
+}
+
+/**
+ * Allow only http(s), protocol-relative, blob:, and data:image/* URLs as
+ * <img src>. Everything else (javascript:, data:text/html, vbscript:, file:,
+ * …) returns an empty string so the browser doesn't issue any request.
+ *
+ * NOTE: permits `data:image/*` and is intended for `<img>` src ONLY — do not
+ * reuse for `<object>`/`<embed>`/`<iframe>` src (their data: URLs can execute).
+ */
+export function safeImageUrl(url) {
+  if (url == null) return '';
+  const s = String(url).replace(URL_CONTROL_CHARS, '').trim();
+  if (!s) return '';
+  if (s.startsWith('//')) return 'https:' + s;
+  const lower = s.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return s;
+  if (lower.startsWith('blob:')) return s;
+  if (lower.startsWith('data:image/')) return s;
+  return '';
+}
+
+/**
+ * JFS-Sports URL sanitizer for innerHTML interpolation. Parses with `new
+ * URL()`, whitelists http(s) only, and returns the HTML-ESCAPED normalized
+ * href. Reject / parse-fail → `""`.
+ *
+ * Whitelist (not blacklist) so a future protocol can't slip through a missing
+ * branch. u.href is the parsed/normalised form; escapeHtml additionally
+ * encodes & → &amp; for valid HTML attributes.
+ */
+export function sanitizeUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:' || u.protocol === 'http:') return escapeHtml(u.href);
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Like sanitizeUrl, but returns the URL WITHOUT HTML-attribute escaping. Use
+ * when passing the value through setAttribute / element.src / element.href,
+ * where the DOM stores the attribute verbatim and HTML escaping would
+ * over-encode characters like `&` (`http://x.com/?a=1&b=2` → broken).
+ * Reject / parse-fail → `""`.
+ *
+ * Differs from safeContentUrl only in its reject sentinel ("" vs null) and in
+ * accepting any `new URL()`-coercible value (a URL object, say) rather than
+ * requiring a string — which is why both survive the merge.
+ */
+export function sanitizeHref(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:' || u.protocol === 'http:') return u.href;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Group B — DOM-dependent helpers
+// ---------------------------------------------------------------------------
+
+// Tiny DOM-builder helper used by renderers to replace
+// `node.innerHTML = '...'` patterns with structural construction.
+// Text-shaped values pass through textContent (auto-escaped),
+// eliminating the need for escapeHtml() at every interpolation
+// point and removing one whole class of XSS surface area: a
+// renderer that forgets `escapeHtml(apiResponseField)` while
+// building an HTML string used to ship a working injection
+// vector; the same renderer using `el(...)` cannot.
+//
+// Usage:
+//   el('div', { class: 'card' }, el('span', null, 'hello'))
+//
+// Special attribute keys:
+//   class    → element.className
+//   text     → element.textContent (shortcut for a single string
+//              child; can't be combined with children args)
+//   data     → object whose keys/values become element.dataset.*
+//             (camelCase keys become data-camel-case attributes
+//             per the standard DOMStringMap rules)
+//   on       → object whose keys are event names → handler
+//             functions. Event delegation via data-action is the
+//             default pattern; this is for the rare per-element
+//             listener case.
+//   Anything else → setAttribute(key, value) when the value is
+//                   non-null. null / undefined values are skipped
+//                   so `{ title: maybeText }` doesn't emit
+//                   `title=""`.
+//
+// Children:
+//   * null / undefined / false → skipped
+//   * string                   → text node (auto-escaped)
+//   * Node                     → appended as-is
+//   * array                    → flattened (one level)
+export function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null) continue;
+      if (k === 'class') node.className = v;
+      else if (k === 'text') node.textContent = v;
+      else if (k === 'data') {
+        for (const dk of Object.keys(v)) {
+          const dv = v[dk];
+          if (dv != null) node.dataset[dk] = String(dv);
+        }
+      } else if (k === 'on') {
+        for (const ek of Object.keys(v)) {
+          node.addEventListener(ek, v[ek]);
+        }
+      } else if (/^on/i.test(k)) {
+        // Never set inline event-handler attributes (onclick/onerror/…)
+        // from a (possibly computed) attr name — that would smuggle
+        // script through the auto-escaping builder. Use the `on` key
+        // for real listeners instead.
+        continue;
+      } else {
+        node.setAttribute(k, String(v));
+      }
+    }
+  }
+  for (const child of children.flat()) {
+    if (child == null || child === false) continue;
+    node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+/**
+ * Weather-compatible thin wrapper over el() — `elem(tag, className, text)` —
+ * so Weather migrates without call-site changes.
+ */
+export function elem(tag, className, text) {
+  return el(tag, { class: className || null, text: text == null ? null : text });
+}
+
+/** document.getElementById shorthand (FlightCheck & Weather's `$`). */
+export const byId = (id) => document.getElementById(id);
+
+/** CSS-selector query shorthand (Art-Gallery-style `$` / `$$`). */
+export const $  = (sel, root = document) => root.querySelector(sel);
+export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+// Whitelist-based HTML sanitizer for description blobs that some sources
+// supply pre-formatted. Returns a STRING of HTML safe to assign to innerHTML —
+// the string-returning sibling of sanitizeHtmlToFragment above, with its own
+// (smaller) allowlist and its own attribute policy, so the two are kept
+// separate rather than unified. Anything not on the allow-list —
+// script/style/iframe, on* attributes, javascript: URLs, etc. — is dropped.
+const _ALLOWED_TAGS = new Set([
+  'a', 'abbr', 'b', 'blockquote', 'br', 'cite', 'code', 'dd', 'dl', 'dt',
+  'em', 'i', 'li', 'ol', 'p', 'pre', 'small', 'span', 'strong', 'sub',
+  'sup', 'u', 'ul',
+]);
+const _ALLOWED_ATTRS = {
+  a:    new Set(['href', 'title']),
+  abbr: new Set(['title']),
+  span: new Set(['title']),
+};
+
+// Tags whose ENTIRE SUBTREE is removed rather than unwrapped. Derived from
+// DEFAULT_BLOCKED — the kit's single policy-owned copy of the family's
+// blocked-tag list (see the sanitize-html section) — lowercased because
+// _scrub compares lowercased tag names. Before the kits merged, this list was
+// a SECOND policy-marked blocked-tags region living in dom-kit that had to be
+// kept in sync across repos by the family sync tool (and drifted once — MATH).
+// Deriving it removes the possibility of drift entirely — and the comment
+// deliberately does NOT spell the marker prefix, because the vendoring
+// tree-shaker treats any declaration whose text contains it as a permanent
+// root.
+const _BLOCKED_TAGS = new Set([...DEFAULT_BLOCKED].map((t) => t.toLowerCase()));
+
+export function sanitizeHtml(html) {
+  if (html == null) return '';
+  const str = String(html);
+  if (!str) return '';
+  const doc = new DOMParser().parseFromString(`<div>${str}</div>`, 'text/html');
+  const root = doc.body.firstChild;
+  if (!root) return '';
+  _scrub(root);
+  return root.innerHTML;
+}
+
+function _scrub(node, depth = 0) {
+  // Fail CLOSED past the depth cap: this scrub mutates in place, so bailing
+  // out with the subtree intact would keep UNsanitized markup. Empty the
+  // node instead. (MAX_DEPTH is shared with sanitizeHtmlToFragment — both
+  // sanitizers used the same 256 before the merge.)
+  if (depth > MAX_DEPTH) {
+    node.textContent = '';
+    return;
+  }
+  // Walk children with a snapshot — replacing nodes mutates the live list.
+  const kids = Array.from(node.childNodes);
+  for (const child of kids) {
+    if (child.nodeType === 1 /* Element */) {
+      // Foreign-content (SVG/MathML) elements have lowercase tag names in
+      // their own namespace; unwrapping them into an HTML sink can
+      // resurrect HTML-breakout children (mXSS). Drop non-XHTML elements
+      // entirely, subtree included.
+      if (child.namespaceURI && child.namespaceURI !== XHTML_NS) {
+        node.removeChild(child);
+        continue;
+      }
+      const tag = child.tagName.toLowerCase();
+      if (_BLOCKED_TAGS.has(tag)) {
+        // Remove the element AND its subtree — never unwrap these.
+        node.removeChild(child);
+        continue;
+      }
+      if (!_ALLOWED_TAGS.has(tag)) {
+        // Unwrap unknown tags: keep the children, drop the wrapper. This
+        // preserves text content from things like <div>/<font>/<img>.
+        //
+        // CRITICAL: scrub the subtree BEFORE hoisting it. The outer loop
+        // iterates a snapshot (`kids`) taken before this insertion, so
+        // nodes moved up to `node` here are never revisited — hoisting
+        // an unscrubbed <script>/onerror/javascript: child would ship it
+        // verbatim. Scrubbing while the children are still inside `child`
+        // cleans them in place, then we lift the now-safe result.
+        _scrub(child, depth + 1);
+        while (child.firstChild) node.insertBefore(child.firstChild, child);
+        node.removeChild(child);
+        continue;
+      }
+      const allowed = _ALLOWED_ATTRS[tag] || new Set();
+      for (const attr of Array.from(child.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!allowed.has(name)) {
+          child.removeAttribute(attr.name);
+          continue;
+        }
+        if (name === 'href') {
+          const safe = safeUrl(attr.value);
+          child.setAttribute('href', safe);
+          // Anchor links open in a new tab — give them noopener/noreferrer
+          // so the target page can't reach back via window.opener.
+          if (safe !== '#') {
+            child.setAttribute('target', '_blank');
+            child.setAttribute('rel', 'noopener noreferrer');
+          }
+        }
+      }
+      _scrub(child, depth + 1);
+    } else if (child.nodeType !== 3 /* Text */ && child.nodeType !== 4 /* CDATA */) {
+      // Drop comments, processing instructions, etc.
+      node.removeChild(child);
+    }
+  }
 }
 
 // ===================== modal =====================
