@@ -86,15 +86,34 @@ the resolution from outside:
 "overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…#<0.12.0 sha>" } }
 ```
 
-The pin is now `eba0518` (0.12.0), so **that `overrides` entry is dead
+The pin is now `e64511e` (0.13.0), so **that `overrides` entry is dead
 weight once a consumer re-pins news-kit to this commit or later** — drop it
 in the same PR as the pin bump. Verified from a consumer's perspective: with
-no override at all, a throwaway install of this package resolves vendor-cli
-0.12.0 and `--format esm --pick …` succeeds; it also succeeds when the
-consumer carries an *older* vendor-cli at top level, because npm nests
-0.12.0 under news-kit and the shim resolves the nested copy.
-`test/vendor.test.js` pins the narrowed-esm behavior so a pin regression
-fails CI here rather than in three consumers' `vendor:sync`.
+no override at all, a throwaway install of this package resolves a
+`--pick`-in-esm-capable vendor-cli and `--format esm --pick …` succeeds; it
+also succeeds when the consumer carries an *older* vendor-cli at top level,
+because npm nests this one under news-kit and the shim resolves the nested
+copy. `test/vendor.test.js` pins the narrowed-esm behavior so a pin
+regression fails CI here rather than in three consumers' `vendor:sync`.
+
+### 0.13.0 shrinks every narrowed build by exactly 131 B
+
+The pin moved `eba0518` (0.12.0) → `e64511e` (0.13.0), six lexer/mask fixes
+in the tree-shaking generator plus a post-shake gate that refuses generation
+if a dropped top-level name still lives in the emitted body. Only one of the
+six moves bytes here: the `$` of a `${…}` interpolation is now its own
+punctuation class, so a template literal anywhere in a kept chunk no longer
+roots this file's top-level `export const $` selector shorthand. Every
+narrowed build whose reachable set contains a template literal loses that
+one dead declaration — `-131 B`, verified identical across the esm, global,
+cjs and bare formats and across the real Art-Gallery- / market-monitor /
+John's News pick lists. A pick list with no reachable template literal
+(Weather's `byId,elem`) is unchanged, and the **full, unnarrowed surface is
+byte-identical in all four formats** — a full surface is never shaken.
+
+Consumers therefore see a byte change on their next `vendor:sync`, so a
+re-vendor needs the usual site version bump; nothing they import changes
+behavior.
 
 <!-- jfs-family-conventions:start — managed by jfs-claude-md-sync; edit family/family-conventions.md in @jfs/vendor-cli -->
 
