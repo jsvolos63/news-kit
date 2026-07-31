@@ -78,28 +78,51 @@ function safeFromCodePoint(cp) {
 // JFS-Sports is the only one that correctly splits the two URL use-cases, and
 // the DOM-API side of that split is preserved here:
 //   - safeContentUrl()     -> normalized href string, NOT HTML-escaped. Use for
-//                             the DOM APIs (el.setAttribute('href', ...),
-//                             el.href, el.src) where the browser stores the
-//                             value verbatim; escaping would double-encode `&`.
+//                             the DOM APIs (setAttribute('href', ...), .href,
+//                             .src) where the browser stores the value
+//                             verbatim; escaping would double-encode `&`.
 //
-// FAMILY NAMING RULE: the generic DOM-safety names (escapeHtml, safeUrl,
-// sanitizeUrl, sanitizeHref, sanitizeHtml) belong to @jfs/dom-kit, with
-// dom-kit's permissive contracts (e.g. its safeUrl returns '#' on reject and
-// allows mailto:). news-kit's guards are strict feed-content validators, so
-// they live under content-scoped names (safeContentUrl, isSafeContentUrl,
-// sanitizeHtmlToFragment) — exporting the same name with a different contract
-// from two kits is deliberately avoided.
+// ABSORBED FROM @jfs/dom-kit (v0.3.3): dom-kit's `escapeHtml` and news-kit's
+// `escHtml` were VERIFIED byte-identical in behavior — a differential run over
+// 85,683 inputs (every code unit 0x00–0xFFFF, astral characters, lone
+// surrogates, null/undefined/non-strings, 20k fuzzed strings) produced zero
+// mismatches, so the two implementations were collapsed into ONE. dom-kit's
+// single-pass table+regex form survives; `escHtml` and `escAttr` are aliases
+// of it, so every consumer's existing import keeps working.
+//
+// The URL guards were NOT collapsed: all fifteen pairs among safeUrl /
+// safeImageUrl / sanitizeUrl / sanitizeHref / safeContentUrl / isSafeContentUrl
+// differ on real inputs (reject sentinel `#` vs `''` vs `null` vs `false`,
+// relative-URL policy, `new URL()` normalization, HTML-escaping of `&`,
+// data:image and blob: allowances). They keep their own implementations and
+// their own contracts — see the `dom` section below for the guard-by-guard
+// comparison.
+
+// All five HTML-significant characters. The textContent → innerHTML trick
+// only escapes <, >, & — quotes are left untouched, which is unsafe in
+// attribute contexts. Replacing all five explicitly keeps the helper
+// usable as `value="${escapeHtml(x)}"` too, not just inside text nodes.
+const HTML_ESCAPES = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+const HTML_ESCAPE_REGEX = /[&<>"']/g;
 
 /** Escape the five HTML-significant characters. Safe for text nodes and for
- *  values placed inside either single- or double-quoted attributes. */
-export function escHtml(s) {
-  return (s == null ? '' : String(s))
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+ *  values placed inside either single- or double-quoted attributes. Coerces
+ *  non-string values via String() and treats null / undefined as empty so
+ *  callers don't have to guard upstream. */
+export function escapeHtml(str) {
+  if (str == null) return '';
+  const s = typeof str === 'string' ? str : String(str);
+  return s.replace(HTML_ESCAPE_REGEX, (ch) => HTML_ESCAPES[ch]);
 }
+// Aliases — market-monitor uses escHtml/escAttr, JFS-Sports uses escapeHtml,
+// news-kit's own consumers use escHtml. One implementation, three names.
+export { escapeHtml as escHtml, escapeHtml as escAttr };
 
 /** Validate a URL and return its normalized absolute href, or null when it is
  *  not a syntactically valid http(s) URL. Blocks javascript:, data:, vbscript:,
@@ -272,17 +295,21 @@ function parseWithDom(xml) {
   return out;
 
   function textOf(node, tags) {
+    // Local bindings deliberately avoid the name `el`: the tree-shaker roots a
+    // top-level declaration by identifier occurrence, so a local `el` here
+    // would drag the exported `el()` element builder into every narrowed
+    // vendored build that picks parseFeed.
     for (const t of tags) {
-      const el = node.querySelector(t);
-      if (el && el.textContent) return el.textContent;
+      const found = node.querySelector(t);
+      if (found && found.textContent) return found.textContent;
     }
     return '';
   }
   function nsText(node, local) {
     // content:encoded etc. — match by local name regardless of prefix binding.
     const els = node.getElementsByTagName('*');
-    for (const el of els) {
-      if (el.localName === local && el.textContent) return el.textContent;
+    for (const cand of els) {
+      if (cand.localName === local && cand.textContent) return cand.textContent;
     }
     return '';
   }
@@ -621,9 +648,12 @@ const DEFAULT_ALLOWED = new Set([
 
 // Tags whose ENTIRE SUBTREE is dropped, never unwrapped. The list is
 // generated from the canonical @jfs sanitizer policy
-// (family/sanitizer-policy.json in @jfs/vendor-cli — also the source for
-// dom-kit's _BLOCKED_TAGS; UPPERCASE here because this sanitizer compares
-// DOM tagName) by `npm run policy:sync`; CI fails on drift.
+// (family/sanitizer-policy.json in @jfs/vendor-cli) by `npm run policy:sync`;
+// CI fails on drift. UPPERCASE here because this sanitizer compares DOM
+// tagName. This is now the kit's ONLY copy of the region: the absorbed
+// dom-kit sanitizer's lowercase `_BLOCKED_TAGS` is DERIVED from this set (see
+// the `dom` section) rather than carrying a second marked region, so the two
+// lists cannot drift from each other at all.
 const DEFAULT_BLOCKED = new Set([
   // @jfs-sanitizer-policy:blocked-tags:start case=upper quote=single
   'SCRIPT', 'STYLE', 'IFRAME', 'NOSCRIPT', 'FORM', 'INPUT', 'BUTTON', 'SELECT',
@@ -641,10 +671,13 @@ const DEFAULT_ATTRS_BY_TAG = {
 
 // Strip ALL C0 controls + DEL anywhere in a URL before scheme checks:
 // browsers drop tab/newline/NUL from a URL before resolving its scheme, so
-// `java\tscript:` would otherwise slip past the scheme tests below. The regex
-// is generated from the canonical @jfs sanitizer policy
-// (family/sanitizer-policy.json in @jfs/vendor-cli — also the source for
-// dom-kit's copy) by `npm run policy:sync`; CI fails on drift.
+// `java\tscript:` would otherwise slip past the scheme tests below, and
+// control characters embedded in an accepted URL must not survive into the
+// returned value either. The regex is generated from the canonical @jfs
+// sanitizer policy (family/sanitizer-policy.json in @jfs/vendor-cli) by
+// `npm run policy:sync`; CI fails on drift. This is the kit's ONLY copy — the
+// absorbed dom-kit guards (safeUrl / safeImageUrl, `dom` section below) share
+// this constant instead of carrying a second marked region.
 // @jfs-sanitizer-policy:url-control-chars:start const=URL_CONTROL_CHARS
 const URL_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 // @jfs-sanitizer-policy:url-control-chars:end
@@ -774,8 +807,10 @@ function appendCleanChildren(parent, target, doc, cfg, depth) {
       appendCleanChildren(node, target, doc, cfg, depth + 1);
       continue;
     }
-    const el = buildAllowed(node, tag, doc, cfg, depth);
-    if (el) target.appendChild(el);
+    // Named `built`, not `el` — see the note in parseFeed's textOf: a local
+    // `el` would false-root the exported `el()` builder in narrowed builds.
+    const built = buildAllowed(node, tag, doc, cfg, depth);
+    if (built) target.appendChild(built);
     else appendCleanChildren(node, target, doc, cfg, depth + 1); // e.g. <img> w/ unsafe src → unwrap
   }
 }
@@ -1808,4 +1843,916 @@ function srcNode(doc, tag, className, ...children) {
     node.appendChild(typeof c === 'string' ? doc.createTextNode(c) : c);
   }
   return node;
+}
+
+// ===================== dom =====================
+// ABSORBED FROM @jfs/dom-kit (v0.3.3) — the generic DOM / escaping / URL-guard
+// primitives, retired into this kit so the family stops paying for a separate
+// repo, CI, pin and vendoring flow for 13 exports that overlapped this one.
+//
+// Two groups:
+//
+//   Group A — PURE (no DOM): the escaper (see the `escape` section — ONE
+//     implementation now, exported as escapeHtml / escHtml / escAttr) plus the
+//     URL guards safeUrl, safeImageUrl, sanitizeUrl, sanitizeHref.
+//
+//   Group B — DOM-dependent: el / elem, byId, $ / $$, sanitizeHtml. These
+//     reach for `document` / `DOMParser`, which the browser supplies at
+//     runtime (and a DOM shim supplies in tests). This module imports
+//     NOTHING — it stays dependency-free at install time.
+//
+// Compatibility-superset rule: the sibling apps grew slightly different
+// helpers for the same idea, so they adopt the kit by changing IMPORT PATHS,
+// not call sites. That means we keep BOTH URL-guard fallbacks (safeUrl → "#",
+// sanitizeUrl → "") byte-for-byte like their origins.
+//
+// WHY THE URL GUARDS ARE NOT DEDUPLICATED. Six guards now live in this file
+// and NONE of them are interchangeable — a differential run over a shared
+// corpus found all fifteen pairs differing on real inputs:
+//
+//   safeUrl(u)           -> string, rejects to "#". Allows http(s), mailto:,
+//                           protocol-relative (rewritten to https:), and
+//                           relative "/", "#", "?". For href attributes.
+//   safeImageUrl(u)      -> string, rejects to "". Allows http(s),
+//                           protocol-relative (→ https:), blob:, data:image/*.
+//                           NO relative paths. For <img src> ONLY.
+//   sanitizeUrl(u)       -> string, rejects to "". new URL() + http(s) only,
+//                           returns the normalized href HTML-ESCAPED
+//                           (`&` → `&amp;`). For innerHTML interpolation.
+//   sanitizeHref(u)      -> string, rejects to "". Same parse/whitelist as
+//                           sanitizeUrl but NOT HTML-escaped. For setAttribute
+//                           / .href / .src, where escaping would over-encode.
+//   safeContentUrl(u)    -> string|null, rejects to null. Same parse/whitelist
+//                           as sanitizeHref, but ALSO requires a string input
+//                           (`safeContentUrl(new URL(...))` → null, whereas
+//                           `sanitizeHref(new URL(...))` → the href) and
+//                           signals reject with null rather than "".
+//   isSafeContentUrl(u)  -> boolean. Permissive feed-content predicate: allows
+//                           absolute http(s), protocol-relative, root-relative
+//                           AND bare relative text; rejects anything else
+//                           carrying a scheme.
+//
+// Concrete divergences that make a silent unification a security/behavior
+// change rather than a refactor:
+//   "//evil.com/x"  → safeUrl "https://evil.com/x" | safeImageUrl
+//                     "https://evil.com/x" | sanitizeUrl "" | sanitizeHref ""
+//                     | safeContentUrl null | isSafeContentUrl true
+//   "/root/rel"     → safeUrl "/root/rel" | safeImageUrl "" | isSafeContentUrl
+//                     true | the three URL()-parsing guards reject
+//   "mailto:a@b.c"  → safeUrl "mailto:a@b.c" | everything else rejects
+//   "data:image/png;base64,AAA" → safeImageUrl keeps it | everything else
+//                     rejects (this is exactly why safeImageUrl is <img>-only)
+//   "http://x/?a=1&b=2" → sanitizeUrl "…&amp;b=2" | sanitizeHref /
+//                     safeContentUrl "…&b=2"
+//
+// The ONE pair that WAS collapsed is the escaper: dom-kit's escapeHtml and
+// news-kit's escHtml agreed on all 85,683 differential inputs, so there is a
+// single implementation with both names (plus escAttr) exported.
+
+/**
+ * Art-Gallery URL guard. Allows http(s):, mailto:, protocol-relative
+ * (`//` → https:), and relative (`/`, `#`, `?`). Everything else — including
+ * javascript:, data:, vbscript: — collapses to `"#"` so a link never fires a
+ * hostile scheme. Shares the policy-owned URL_CONTROL_CHARS strip with the
+ * feed-content guards above.
+ */
+export function safeUrl(url) {
+  if (url == null) return '#';
+  const s = String(url).replace(URL_CONTROL_CHARS, '').trim();
+  if (!s) return '#';
+  // Protocol-relative is treated as https. This check has to run before the
+  // single-slash check below, otherwise "//evil.com" would return verbatim
+  // and resolve against the current scheme (file://, http://, etc.).
+  if (s.startsWith('//')) return 'https:' + s;
+  // Relative paths and fragments are safe.
+  if (s.startsWith('/') || s.startsWith('#') || s.startsWith('?')) return s;
+  const lower = s.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('mailto:')) {
+    return s;
+  }
+  return '#';
+}
+
+/**
+ * Allow only http(s), protocol-relative, blob:, and data:image/* URLs as
+ * <img src>. Everything else (javascript:, data:text/html, vbscript:, file:,
+ * …) returns an empty string so the browser doesn't issue any request.
+ *
+ * NOTE: permits `data:image/*` and is intended for `<img>` src ONLY — do not
+ * reuse for `<object>`/`<embed>`/`<iframe>` src (their data: URLs can execute).
+ */
+export function safeImageUrl(url) {
+  if (url == null) return '';
+  const s = String(url).replace(URL_CONTROL_CHARS, '').trim();
+  if (!s) return '';
+  if (s.startsWith('//')) return 'https:' + s;
+  const lower = s.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return s;
+  if (lower.startsWith('blob:')) return s;
+  if (lower.startsWith('data:image/')) return s;
+  return '';
+}
+
+/**
+ * JFS-Sports URL sanitizer for innerHTML interpolation. Parses with `new
+ * URL()`, whitelists http(s) only, and returns the HTML-ESCAPED normalized
+ * href. Reject / parse-fail → `""`.
+ *
+ * Whitelist (not blacklist) so a future protocol can't slip through a missing
+ * branch. u.href is the parsed/normalised form; escapeHtml additionally
+ * encodes & → &amp; for valid HTML attributes.
+ */
+export function sanitizeUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:' || u.protocol === 'http:') return escapeHtml(u.href);
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Like sanitizeUrl, but returns the URL WITHOUT HTML-attribute escaping. Use
+ * when passing the value through setAttribute / element.src / element.href,
+ * where the DOM stores the attribute verbatim and HTML escaping would
+ * over-encode characters like `&` (`http://x.com/?a=1&b=2` → broken).
+ * Reject / parse-fail → `""`.
+ *
+ * Differs from safeContentUrl only in its reject sentinel ("" vs null) and in
+ * accepting any `new URL()`-coercible value (a URL object, say) rather than
+ * requiring a string — which is why both survive the merge.
+ */
+export function sanitizeHref(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:' || u.protocol === 'http:') return u.href;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Group B — DOM-dependent helpers
+// ---------------------------------------------------------------------------
+
+// Tiny DOM-builder helper used by renderers to replace
+// `node.innerHTML = '...'` patterns with structural construction.
+// Text-shaped values pass through textContent (auto-escaped),
+// eliminating the need for escapeHtml() at every interpolation
+// point and removing one whole class of XSS surface area: a
+// renderer that forgets `escapeHtml(apiResponseField)` while
+// building an HTML string used to ship a working injection
+// vector; the same renderer using `el(...)` cannot.
+//
+// Usage:
+//   el('div', { class: 'card' }, el('span', null, 'hello'))
+//
+// Special attribute keys:
+//   class    → element.className
+//   text     → element.textContent (shortcut for a single string
+//              child; can't be combined with children args)
+//   data     → object whose keys/values become element.dataset.*
+//             (camelCase keys become data-camel-case attributes
+//             per the standard DOMStringMap rules)
+//   on       → object whose keys are event names → handler
+//             functions. Event delegation via data-action is the
+//             default pattern; this is for the rare per-element
+//             listener case.
+//   Anything else → setAttribute(key, value) when the value is
+//                   non-null. null / undefined values are skipped
+//                   so `{ title: maybeText }` doesn't emit
+//                   `title=""`.
+//
+// Children:
+//   * null / undefined / false → skipped
+//   * string                   → text node (auto-escaped)
+//   * Node                     → appended as-is
+//   * array                    → flattened (one level)
+export function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null) continue;
+      if (k === 'class') node.className = v;
+      else if (k === 'text') node.textContent = v;
+      else if (k === 'data') {
+        for (const dk of Object.keys(v)) {
+          const dv = v[dk];
+          if (dv != null) node.dataset[dk] = String(dv);
+        }
+      } else if (k === 'on') {
+        for (const ek of Object.keys(v)) {
+          node.addEventListener(ek, v[ek]);
+        }
+      } else if (/^on/i.test(k)) {
+        // Never set inline event-handler attributes (onclick/onerror/…)
+        // from a (possibly computed) attr name — that would smuggle
+        // script through the auto-escaping builder. Use the `on` key
+        // for real listeners instead.
+        continue;
+      } else {
+        node.setAttribute(k, String(v));
+      }
+    }
+  }
+  for (const child of children.flat()) {
+    if (child == null || child === false) continue;
+    node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+/**
+ * Weather-compatible thin wrapper over el() — `elem(tag, className, text)` —
+ * so Weather migrates without call-site changes.
+ */
+export function elem(tag, className, text) {
+  return el(tag, { class: className || null, text: text == null ? null : text });
+}
+
+/** document.getElementById shorthand (FlightCheck & Weather's `$`). */
+export const byId = (id) => document.getElementById(id);
+
+/** CSS-selector query shorthand (Art-Gallery-style `$` / `$$`). */
+export const $  = (sel, root = document) => root.querySelector(sel);
+export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+// Whitelist-based HTML sanitizer for description blobs that some sources
+// supply pre-formatted. Returns a STRING of HTML safe to assign to innerHTML —
+// the string-returning sibling of sanitizeHtmlToFragment above, with its own
+// (smaller) allowlist and its own attribute policy, so the two are kept
+// separate rather than unified. Anything not on the allow-list —
+// script/style/iframe, on* attributes, javascript: URLs, etc. — is dropped.
+const _ALLOWED_TAGS = new Set([
+  'a', 'abbr', 'b', 'blockquote', 'br', 'cite', 'code', 'dd', 'dl', 'dt',
+  'em', 'i', 'li', 'ol', 'p', 'pre', 'small', 'span', 'strong', 'sub',
+  'sup', 'u', 'ul',
+]);
+const _ALLOWED_ATTRS = {
+  a:    new Set(['href', 'title']),
+  abbr: new Set(['title']),
+  span: new Set(['title']),
+};
+
+// Tags whose ENTIRE SUBTREE is removed rather than unwrapped. Derived from
+// DEFAULT_BLOCKED — the kit's single policy-owned copy of the family's
+// blocked-tag list (see the sanitize-html section) — lowercased because
+// _scrub compares lowercased tag names. Before the kits merged, this list was
+// a SECOND policy-marked blocked-tags region living in dom-kit that had to be
+// kept in sync across repos by the family sync tool (and drifted once — MATH).
+// Deriving it removes the possibility of drift entirely — and the comment
+// deliberately does NOT spell the marker prefix, because the vendoring
+// tree-shaker treats any declaration whose text contains it as a permanent
+// root.
+const _BLOCKED_TAGS = new Set([...DEFAULT_BLOCKED].map((t) => t.toLowerCase()));
+
+export function sanitizeHtml(html) {
+  if (html == null) return '';
+  const str = String(html);
+  if (!str) return '';
+  const doc = new DOMParser().parseFromString(`<div>${str}</div>`, 'text/html');
+  const root = doc.body.firstChild;
+  if (!root) return '';
+  _scrub(root);
+  return root.innerHTML;
+}
+
+function _scrub(node, depth = 0) {
+  // Fail CLOSED past the depth cap: this scrub mutates in place, so bailing
+  // out with the subtree intact would keep UNsanitized markup. Empty the
+  // node instead. (MAX_DEPTH is shared with sanitizeHtmlToFragment — both
+  // sanitizers used the same 256 before the merge.)
+  if (depth > MAX_DEPTH) {
+    node.textContent = '';
+    return;
+  }
+  // Walk children with a snapshot — replacing nodes mutates the live list.
+  const kids = Array.from(node.childNodes);
+  for (const child of kids) {
+    if (child.nodeType === 1 /* Element */) {
+      // Foreign-content (SVG/MathML) elements have lowercase tag names in
+      // their own namespace; unwrapping them into an HTML sink can
+      // resurrect HTML-breakout children (mXSS). Drop non-XHTML elements
+      // entirely, subtree included.
+      if (child.namespaceURI && child.namespaceURI !== XHTML_NS) {
+        node.removeChild(child);
+        continue;
+      }
+      const tag = child.tagName.toLowerCase();
+      if (_BLOCKED_TAGS.has(tag)) {
+        // Remove the element AND its subtree — never unwrap these.
+        node.removeChild(child);
+        continue;
+      }
+      if (!_ALLOWED_TAGS.has(tag)) {
+        // Unwrap unknown tags: keep the children, drop the wrapper. This
+        // preserves text content from things like <div>/<font>/<img>.
+        //
+        // CRITICAL: scrub the subtree BEFORE hoisting it. The outer loop
+        // iterates a snapshot (`kids`) taken before this insertion, so
+        // nodes moved up to `node` here are never revisited — hoisting
+        // an unscrubbed <script>/onerror/javascript: child would ship it
+        // verbatim. Scrubbing while the children are still inside `child`
+        // cleans them in place, then we lift the now-safe result.
+        _scrub(child, depth + 1);
+        while (child.firstChild) node.insertBefore(child.firstChild, child);
+        node.removeChild(child);
+        continue;
+      }
+      const allowed = _ALLOWED_ATTRS[tag] || new Set();
+      for (const attr of Array.from(child.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!allowed.has(name)) {
+          child.removeAttribute(attr.name);
+          continue;
+        }
+        if (name === 'href') {
+          const safe = safeUrl(attr.value);
+          child.setAttribute('href', safe);
+          // Anchor links open in a new tab — give them noopener/noreferrer
+          // so the target page can't reach back via window.opener.
+          if (safe !== '#') {
+            child.setAttribute('target', '_blank');
+            child.setAttribute('rel', 'noopener noreferrer');
+          }
+        }
+      }
+      _scrub(child, depth + 1);
+    } else if (child.nodeType !== 3 /* Text */ && child.nodeType !== 4 /* CDATA */) {
+      // Drop comments, processing instructions, etc.
+      node.removeChild(child);
+    }
+  }
+}
+
+// ===================== modal =====================
+// ABSORBED FROM @jfs/modal-kit (v0.1.4) — accessible dialog plumbing for the
+// JFS family of buildless static PWAs: focus trap + focus save/restore,
+// iOS-safe scroll-lock, a central Escape stack, marker-guarded inert/
+// aria-hidden siblings, bfcache cleanup, and an opt-in history-sentinel so the
+// browser Back button (and iOS edge-swipe) closes the topmost dialog.
+//
+// Six repos hand-roll this, ranging from best-in-class to buggy. Bears'
+// js/lib/modal.js has the robust *environment* layer (position:fixed
+// scroll-lock with offset restore, marker-guarded inert siblings, soft-keyboard
+// blur, pagehide cleanup) but no Tab trap; JFS-Sports' modal-focus.js and
+// Art-Gallery's createModalSession have the *lifecycle* layer (a real focus
+// trap, a reference-counted open stack, history-back close). This section is
+// the promoted superset: Bears' scroll-lock/inert/pagehide + Art-Gallery's
+// trap/stack/history, in one API.
+//
+// Dependency-free. It reads the ambient `document` / `window` / `history`
+// (like every reference impl — these are page scripts), so calling an
+// instance's open()/close() requires a DOM. IMPORTING THE MODULE DOES NOT, and
+// nothing here runs at module scope: the shared Escape / popstate / pagehide
+// listeners are wired LAZILY, on the first open() (see wireGlobals), which is
+// what keeps the package's `"sideEffects": false` honest and lets a narrowed
+// vendored build tree-shake this section away entirely.
+//
+// One call per dialog:
+//
+//   import { createModal } from './news-kit/index.js';
+//   const modal = createModal(document.getElementById('sheet'), {
+//     focusTarget: '#sheet-close',
+//     onClose: () => resetForm(),
+//   });
+//   openBtn.addEventListener('click', () => modal.open());
+//
+// Scroll-lock uses a `position: fixed` body class (default `.modal-open`); ship
+//   .modal-open { position: fixed; width: 100%; }
+// in your CSS so the page can't scroll behind the dialog.
+//
+// NAMING NOTE (merge): modal-kit's local/parameter name for the dialog element
+// was `el`. In this merged kit `el` is the exported element builder absorbed
+// from @jfs/dom-kit, so the dialog binding is spelled `dialogEl` / `target`
+// here — which also keeps the vendoring tree-shaker from false-rooting the
+// builder into every narrowed modal build. The PUBLIC contract is unchanged:
+// the onOpen/onClose payload is still `{ el }`.
+
+// ───────────────────────── shared module state ─────────────────────────
+
+// Sessions currently open, in open order. The last entry is the topmost dialog
+// (the one Escape and the Back button act on). Reference-counted for scroll-lock.
+const openStack = [];
+
+let globalsWired = false;
+let savedScrollY = 0;
+// Set right before we call history.back() ourselves, so the popstate it fires
+// is recognized as our own and doesn't double-close.
+let expectOwnPopstate = false;
+
+// Scroll-lock is reference-counted across every OPEN dialog that asked for it —
+// independent of the Escape/history stack. Without a dedicated count, a
+// `scrollLock:false` dialog closing last could leave the body frozen, or one
+// opening second could suppress a `scrollLock:true` dialog's lock. We remember
+// the doc + class used to lock so the unlock (possibly triggered by a different
+// dialog or pagehide) reverses exactly that.
+let scrollLockCount = 0;
+let lockedDoc = null;
+let lockedClass = null;
+
+// History-sentinel sessions in push order, so a programmatic close only pops the
+// browser history entry when it's the topmost sentinel (popping a buried one
+// would desync the guard from the visible dialog).
+const historyStack = [];
+
+// The standard focusable set, plus contenteditable and positive-tabindex nodes.
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'area[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'iframe',
+  'object',
+  'embed',
+  'audio[controls]',
+  'video[controls]',
+  '[contenteditable="true"]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function winOf(target) {
+  return (target.ownerDocument && target.ownerDocument.defaultView) || globalThis.window || globalThis;
+}
+
+// Run a user-supplied lifecycle callback without letting it escape. A throwing
+// onOpen/onClose must not propagate out of a shared document/window handler
+// (Escape, popstate) or out of open()/close() and leave the page with scroll
+// still locked or siblings still inert.
+function safeCall(fn, arg) {
+  if (typeof fn !== 'function') return;
+  try {
+    fn(arg);
+  } catch (err) {
+    // Surface for debugging without breaking modal teardown.
+    if (typeof console !== 'undefined' && console.error) {
+      console.error('[news-kit/modal] lifecycle callback threw:', err);
+    }
+  }
+}
+
+function isVisible(target) {
+  // Layout-free visibility check: honors `aria-hidden`, the element's own
+  // computed `visibility` (which inherits), and — crucially — `display:none`
+  // (and the `hidden` attribute, which is UA `display:none`) ANYWHERE up the
+  // ancestor chain. `display` doesn't inherit, so an element inside a
+  // `display:none` wrapper has its own `display:block` and would otherwise slip
+  // through, letting the Tab trap focus an unrendered control. Deliberately
+  // avoids offsetParent/size so it stays correct under a layout-less test DOM
+  // (jsdom) as well as in real browsers.
+  if (target.getAttribute && target.getAttribute('aria-hidden') === 'true') return false;
+  const view = winOf(target);
+  const getCS = typeof view.getComputedStyle === 'function' ? (n) => view.getComputedStyle(n) : null;
+  if (getCS) {
+    const own = getCS(target);
+    if (own && own.visibility === 'hidden') return false;
+  }
+  for (let node = target; node && node.nodeType === 1; node = node.parentElement) {
+    if (node.hasAttribute && node.hasAttribute('hidden')) return false;
+    if (getCS) {
+      const s = getCS(node);
+      if (s && s.display === 'none') return false;
+    }
+  }
+  return true;
+}
+
+/** Visible, focusable descendants of `container`, in DOM order. Exported so
+ *  consumers/tests can reuse the same focusable definition the trap uses. */
+export function getFocusable(container) {
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(isVisible);
+}
+
+/** True while any dialog created by this module is open. */
+export function isAnyModalOpen() {
+  return openStack.length > 0;
+}
+
+function topSession() {
+  return openStack[openStack.length - 1] || null;
+}
+
+// ───────────────────────── shared globals (wired once) ─────────────────────
+
+// Called from open(), never at module scope — see the side-effect note above.
+function wireGlobals(doc) {
+  if (globalsWired) return;
+  globalsWired = true;
+
+  // Escape closes the topmost dialog that opted in. `defaultPrevented` lets a
+  // dialog's own handler (or a nested widget) suppress this.
+  doc.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' && e.keyCode !== 27) return;
+    if (e.defaultPrevented) return;
+    const top = topSession();
+    if (top && top.escClose) {
+      e.preventDefault();
+      top.requestClose();
+    }
+  });
+
+  // Browser Back / iOS edge-swipe: close the topmost history-enabled dialog
+  // rather than navigating the page away.
+  const view = doc.defaultView || globalThis.window;
+  if (view && typeof view.addEventListener === 'function') {
+    view.addEventListener('popstate', () => {
+      if (expectOwnPopstate) {
+        expectOwnPopstate = false;
+        return;
+      }
+      // The user popped the topmost sentinel — close the dialog that pushed it
+      // (not just whatever is visually on top), and don't push another back().
+      const sess = historyStack[historyStack.length - 1];
+      if (sess) {
+        historyStack.pop();
+        sess.requestClose(true);
+      }
+    });
+
+    // bfcache safety: if the page is frozen with a dialog open, make sure the
+    // scroll-lock class/offset can't survive a restore and freeze the page.
+    view.addEventListener('pagehide', () => {
+      forceUnlockScroll();
+    });
+  }
+}
+
+// ───────────────────────── scroll lock (reference-counted) ──────────────────
+
+function acquireScrollLock(doc, cls) {
+  if (scrollLockCount === 0) {
+    lockedDoc = doc;
+    lockedClass = cls;
+    const view = doc.defaultView || globalThis.window;
+    savedScrollY = (view && (view.scrollY || view.pageYOffset)) || 0;
+    doc.body.classList.add(cls);
+    // Set via CSSOM (not an inline style attribute), so a strict CSP style-src
+    // without 'unsafe-inline' still allows it.
+    doc.body.style.top = `-${savedScrollY}px`;
+  }
+  scrollLockCount++;
+}
+
+function releaseScrollLock() {
+  if (scrollLockCount === 0) return;
+  scrollLockCount--;
+  if (scrollLockCount === 0) forceUnlockScroll();
+}
+
+// Reverse whatever acquireScrollLock did, using the doc/class it locked with
+// (the releasing dialog — or pagehide — may not be the one that locked).
+function forceUnlockScroll() {
+  if (!lockedDoc || !lockedDoc.body) {
+    scrollLockCount = 0;
+    lockedDoc = null;
+    lockedClass = null;
+    return;
+  }
+  const doc = lockedDoc;
+  doc.body.classList.remove(lockedClass);
+  doc.body.style.top = '';
+  const view = doc.defaultView || globalThis.window;
+  if (view && typeof view.scrollTo === 'function') {
+    try {
+      view.scrollTo(0, savedScrollY);
+    } catch {
+      // A layout-less test DOM may not implement scrollTo — harmless to skip.
+    }
+  }
+  scrollLockCount = 0;
+  lockedDoc = null;
+  lockedClass = null;
+}
+
+// ───────────────────────── inert siblings (marker-guarded) ──────────────────
+
+// Our markers carry a DEPTH, not a boolean flag. Two open dialogs can cover the
+// same background element (one opened over another); with a plain '1' flag the
+// inner dialog's close() would strip the `inert`/`aria-hidden` the still-open
+// outer dialog installed, handing the background back to the tab order and the
+// AT tree behind a visibly open modal. Counting means only the LAST release
+// restores the element. ('1' written by an older version reads back as depth 1.)
+function markerDepth(node, key) {
+  const raw = node.dataset ? node.dataset[key] : null;
+  const n = raw ? parseInt(raw, 10) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function hideBackground(node) {
+  // Only inert nodes we ourselves marked, so we never strip an `inert` that was
+  // set for another reason (the app's own markup, say).
+  const depth = markerDepth(node, 'jfsModalInert');
+  if (depth > 0) {
+    node.dataset.jfsModalInert = String(depth + 1);
+  } else if (!node.inert) {
+    node.inert = true;
+    node.dataset.jfsModalInert = '1';
+  }
+  // aria-hidden alongside inert (separately marker-guarded + depth-counted):
+  // `inert` is a no-op expando in browsers that don't support it (Safari <
+  // 15.5), and aria-hidden keeps screen readers out of the background there
+  // too. Never overwrite an aria-hidden the app set itself.
+  const aria = markerDepth(node, 'jfsModalAriaHidden');
+  if (aria > 0) {
+    node.dataset.jfsModalAriaHidden = String(aria + 1);
+  } else if (!node.hasAttribute('aria-hidden')) {
+    node.setAttribute('aria-hidden', 'true');
+    node.dataset.jfsModalAriaHidden = '1';
+  }
+}
+
+function showBackground(node) {
+  const depth = markerDepth(node, 'jfsModalInert');
+  if (depth > 1) {
+    node.dataset.jfsModalInert = String(depth - 1);
+  } else if (depth === 1) {
+    node.inert = false;
+    delete node.dataset.jfsModalInert;
+  }
+  const aria = markerDepth(node, 'jfsModalAriaHidden');
+  if (aria > 1) {
+    node.dataset.jfsModalAriaHidden = String(aria - 1);
+  } else if (aria === 1) {
+    node.removeAttribute('aria-hidden');
+    delete node.dataset.jfsModalAriaHidden;
+  }
+}
+
+// Drop OUR markers on `target` outright, whatever their depth. Called as a
+// dialog opens: a dialog that is a SIBLING of an already-open one was marked
+// inert (and aria-hidden) by that dialog's open(), and would otherwise come up
+// unclickable, unfocusable and absent from the screen-reader tree even though
+// it is the topmost, focused dialog. Marker-guarded as ever — an `inert`/
+// `aria-hidden` the app set itself is left alone.
+function clearOwnHiding(target) {
+  if (target.dataset && target.dataset.jfsModalInert) {
+    target.inert = false;
+    delete target.dataset.jfsModalInert;
+  }
+  if (target.dataset && target.dataset.jfsModalAriaHidden) {
+    target.removeAttribute('aria-hidden');
+    delete target.dataset.jfsModalAriaHidden;
+  }
+}
+
+function setSiblingsInert(target, on) {
+  const parent = target.parentNode;
+  if (!parent) return;
+  for (const sib of Array.from(parent.children)) {
+    if (sib === target) continue;
+    const tag = sib.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+    if (on) hideBackground(sib);
+    else showBackground(sib);
+  }
+}
+
+// ───────────────────────── history sentinel (opt-in) ────────────────────────
+
+function pushHistorySentinel(hist) {
+  if (hist && typeof hist.pushState === 'function') {
+    try {
+      hist.pushState({ __jfsModal: true }, '');
+    } catch {
+      // Some embedded contexts forbid pushState; the dialog still works, it
+      // just won't be Back-button-closable.
+    }
+  }
+}
+
+// ───────────────────────── createModal ─────────────────────────
+
+/** Create a dialog controller for `dialogEl`. Returns `{ open, close, isOpen }`.
+ *  A falsy element yields an inert no-op controller (defensive, matches Bears).
+ *
+ *  Options (all optional):
+ *    focusTarget    element | selector-within-the-dialog | (default) first focusable
+ *    focusDelay     ms to defer initial focus (default 0; set ~30 to let iOS
+ *                   finish hiding the soft keyboard, as Bears does)
+ *    escClose       Escape closes this dialog when topmost (default true)
+ *    trapFocus      wrap Tab/Shift+Tab inside the dialog (default true)
+ *    scrollLock     lock body scroll while open (default true)
+ *    scrollLockClass  body class supplying `position:fixed` (default 'modal-open')
+ *    inertSiblings  mark sibling elements inert + aria-hide (default true)
+ *    closeOnBackdrop  a pointer on the dialog itself or any [data-close] closes
+ *                   it (default true)
+ *    shouldCloseOnPointer(e)  replace the default backdrop/[data-close] predicate
+ *    history        push a history sentinel so Back / edge-swipe closes it
+ *                   (default false — it manipulates the history stack)
+ *    hiddenAttr     toggle .hidden for visibility (default true)
+ *    openClass      also toggle this class on the dialog (for apps whose CSS
+ *                   keys visibility off a class, e.g. 'is-open' / 'visible')
+ *    ariaHidden     toggle the dialog's aria-hidden with visibility (default true)
+ *    onOpen({el}) / onClose({el})  lifecycle callbacks
+ */
+export function createModal(dialogEl, options = {}) {
+  if (!dialogEl) {
+    return { open() {}, close() {}, isOpen() { return false; } };
+  }
+
+  const opts = {
+    focusTarget: null,
+    focusDelay: 0,
+    escClose: true,
+    trapFocus: true,
+    scrollLock: true,
+    scrollLockClass: 'modal-open',
+    inertSiblings: true,
+    closeOnBackdrop: true,
+    shouldCloseOnPointer: null,
+    history: false,
+    hiddenAttr: true,
+    openClass: null,
+    ariaHidden: true,
+    onOpen: null,
+    onClose: null,
+    ...options,
+  };
+
+  const doc = dialogEl.ownerDocument || globalThis.document;
+
+  const session = {
+    escClose: opts.escClose,
+    history: opts.history,
+    scrollLockClass: opts.scrollLockClass,
+    opened: false,
+    prevFocus: null,
+    // Wired below so the shared Escape/popstate handlers can close whichever
+    // session is topmost without reaching for the returned controller.
+    requestClose: null,
+  };
+
+  function show() {
+    if (opts.hiddenAttr) dialogEl.hidden = false;
+    if (opts.openClass) dialogEl.classList.add(opts.openClass);
+    if (opts.ariaHidden) dialogEl.setAttribute('aria-hidden', 'false');
+  }
+  function hide() {
+    if (opts.hiddenAttr) dialogEl.hidden = true;
+    if (opts.openClass) dialogEl.classList.remove(opts.openClass);
+    if (opts.ariaHidden) dialogEl.setAttribute('aria-hidden', 'true');
+  }
+
+  function resolveFocusTarget() {
+    const t = opts.focusTarget;
+    if (t) {
+      const node = typeof t === 'string' ? dialogEl.querySelector(t) : t;
+      if (node) return node;
+    }
+    const focusables = getFocusable(dialogEl);
+    if (focusables.length) return focusables[0];
+    // Nothing focusable inside — focus the dialog itself so the trap and screen
+    // readers have an anchor.
+    if (!dialogEl.getAttribute('tabindex')) dialogEl.setAttribute('tabindex', '-1');
+    return dialogEl;
+  }
+
+  function onKeydown(e) {
+    if (e.key !== 'Tab' && e.keyCode !== 9) return;
+    const focusables = getFocusable(dialogEl);
+    if (focusables.length === 0) {
+      e.preventDefault();
+      if (typeof dialogEl.focus === 'function') dialogEl.focus();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = doc.activeElement;
+    const escaped = !dialogEl.contains(active);
+    if (e.shiftKey) {
+      if (active === first || escaped) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || escaped) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function onPointerDown(e) {
+    const predicate =
+      opts.shouldCloseOnPointer ||
+      ((ev) =>
+        ev.target === dialogEl ||
+        (ev.target && typeof ev.target.closest === 'function' && ev.target.closest('[data-close]')));
+    if (predicate(e)) {
+      e.preventDefault();
+      close();
+    }
+  }
+
+  function open() {
+    if (session.opened) return;
+    session.opened = true;
+
+    // Capture + blur the trigger so restore returns focus there, and iOS drops
+    // the soft keyboard before we lock.
+    const active = doc.activeElement;
+    session.prevFocus = active && active !== doc.body ? active : null;
+    if (session.prevFocus && typeof session.prevFocus.blur === 'function') session.prevFocus.blur();
+
+    openStack.push(session);
+    wireGlobals(doc);
+
+    if (opts.scrollLock) acquireScrollLock(doc, opts.scrollLockClass);
+    // Undo any hiding an earlier sibling dialog's open() put on US before we
+    // show, so the dialog coming up on top is interactive and in the AT tree.
+    clearOwnHiding(dialogEl);
+    if (opts.inertSiblings) setSiblingsInert(dialogEl, true);
+
+    show();
+
+    if (opts.trapFocus) dialogEl.addEventListener('keydown', onKeydown);
+    if (opts.closeOnBackdrop || opts.shouldCloseOnPointer) dialogEl.addEventListener('click', onPointerDown);
+    if (opts.history) {
+      pushHistorySentinel(doc.defaultView && doc.defaultView.history);
+      historyStack.push(session);
+    }
+
+    const focusTarget = resolveFocusTarget();
+    const doFocus = () => {
+      if (session.opened && typeof focusTarget.focus === 'function') {
+        focusTarget.focus({ preventScroll: true });
+      }
+    };
+    if (opts.focusDelay > 0) setTimeout(doFocus, opts.focusDelay);
+    else doFocus();
+
+    safeCall(opts.onOpen, { el: dialogEl });
+  }
+
+  function close(fromHistory = false) {
+    if (!session.opened) return;
+    session.opened = false;
+
+    const idx = openStack.indexOf(session);
+    if (idx !== -1) openStack.splice(idx, 1);
+
+    if (opts.trapFocus) dialogEl.removeEventListener('keydown', onKeydown);
+    if (opts.closeOnBackdrop || opts.shouldCloseOnPointer) dialogEl.removeEventListener('click', onPointerDown);
+    if (opts.inertSiblings) setSiblingsInert(dialogEl, false);
+
+    hide();
+
+    if (opts.scrollLock) releaseScrollLock();
+
+    if (session.prevFocus && doc.contains(session.prevFocus) && typeof session.prevFocus.focus === 'function') {
+      session.prevFocus.focus({ preventScroll: true });
+    }
+    session.prevFocus = null;
+
+    // Reconcile the browser history sentinel — unless this close was itself
+    // triggered by a history pop (the popstate handler already navigated and
+    // removed the entry).
+    if (opts.history && !fromHistory) {
+      const hIdx = historyStack.indexOf(session);
+      if (hIdx !== -1) {
+        const isTopSentinel = hIdx === historyStack.length - 1;
+        historyStack.splice(hIdx, 1);
+        // Only pop the browser entry when it's the topmost sentinel; popping a
+        // buried one would rewind the wrong dialog. A buried sentinel is left as
+        // an inert history entry (a later stray Back is absorbed as a no-op).
+        if (isTopSentinel) {
+          const hist = doc.defaultView && doc.defaultView.history;
+          if (hist && typeof hist.back === 'function') {
+            expectOwnPopstate = true;
+            hist.back();
+          }
+        }
+      }
+    }
+
+    safeCall(opts.onClose, { el: dialogEl });
+  }
+
+  session.requestClose = close;
+
+  // The public close is a wrapper so the internal fromHistory flag can never
+  // leak in from consumer call sites: `btn.addEventListener('click', modal.close)`
+  // passes the click Event as the first argument, and a truthy fromHistory
+  // would skip the sentinel reconciliation above — leaving a dead history
+  // entry so a later Back press closes nothing. Only the shared popstate
+  // handler (via session.requestClose) may pass fromHistory = true.
+  return { open, close: () => close(false), isOpen: () => session.opened };
+}
+
+/** Test seam: force the modal module back to a clean slate (empty stack,
+ *  globals re-wire on next open). Not part of the production surface. */
+export function _resetModalsForTest() {
+  openStack.length = 0;
+  historyStack.length = 0;
+  globalsWired = false;
+  savedScrollY = 0;
+  expectOwnPopstate = false;
+  scrollLockCount = 0;
+  lockedDoc = null;
+  lockedClass = null;
 }
