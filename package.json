@@ -39,7 +39,7 @@
     "policy:check": "jfs-sanitizer-policy-sync --check index.js"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#b95e4c91bb7aa5b653cd8bf5f7c5bc4b012d3ad5"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#386e8eb37f222c163e3f2701f7ddfbf76279c149"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"

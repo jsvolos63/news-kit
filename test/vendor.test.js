@@ -128,13 +128,39 @@ test('global format: repeatable --global emits several named globals over ONE ki
   assert.ok(!/^export\s/m.test(out), 'no export keywords may survive');
   assert.deepEqual([...globalMapNames(out, 'GlobA')].sort(), [...a].sort());
   assert.deepEqual([...globalMapNames(out, 'GlobB')].sort(), [...b].sort());
-  // The whole point of the flag: one shared body, not the full bundle once
-  // per global — the emitted file must be barely bigger than a single-global
-  // build, never anywhere near two of them.
-  const single = run(['--format', 'global', '--name', 'G', '--pick', a.join(','), '--out', 'single.js'], dir);
+
+  // The whole point of the flag: ONE shared body, not the full bundle once per
+  // global. Proved two ways, because since @jfs/vendor-cli 0.11.0 a narrowed
+  // build is TREE-SHAKEN — its body varies with what was picked, so comparing a
+  // two-pick-set build against a one-pick-set build no longer measures body
+  // duplication at all (it measures the extra reachable code the second pick
+  // set pulls in).
+  //
+  // (1) Two globals over the SAME picks must weigh barely more than one global
+  //     over those picks — the delta is the second surface map, not a second
+  //     copy of the body.
+  const samePicks = a.join(',');
+  assert.equal(
+    run(['--format', 'global', '--global', `GlobA:${samePicks}`, '--global', `GlobB:${samePicks}`, '--out', 'same.js'], dir).status,
+    0
+  );
+  const single = run(['--format', 'global', '--name', 'G', '--pick', samePicks, '--out', 'single.js'], dir);
   assert.equal(single.status, 0, single.stderr);
+  const sameSize = readFileSync(join(dir, 'same.js'), 'utf8').length;
   const singleSize = readFileSync(join(dir, 'single.js'), 'utf8').length;
-  assert.ok(out.length < singleSize * 1.1, `multi-global (${out.length}) must not re-ship the body (single: ${singleSize})`);
+  assert.ok(
+    sameSize < singleSize * 1.1,
+    `two globals over identical picks (${sameSize}) must not re-ship the body (single: ${singleSize})`
+  );
+
+  // (2) The real multi-pick-set build must still be cheaper than shipping the
+  //     two narrowed builds as separate files.
+  assert.equal(run(['--format', 'global', '--name', 'H', '--pick', b.join(','), '--out', 'singleB.js'], dir).status, 0);
+  const singleBSize = readFileSync(join(dir, 'singleB.js'), 'utf8').length;
+  assert.ok(
+    out.length < singleSize + singleBSize,
+    `multi-global (${out.length}) must beat two separate builds (${singleSize} + ${singleBSize})`
+  );
 });
 
 test('global format: a single --global spelling emits exactly the legacy --name/--pick bytes', () => {
