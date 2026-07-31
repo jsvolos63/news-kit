@@ -54,8 +54,10 @@ What the merge did:
 
 Since `@jfs/vendor-cli` 0.11.0 a `--pick`/`--global`-narrowed build is
 tree-shaken to the reachable body, so a consumer that only wants the escaper
-ships ~5 KB, not the 114 KB full bundle. Two consequences to keep in mind
-when editing `index.js`:
+ships ~5 KB, not the 113 KB full bundle. 0.12.0 extends that to `--format
+esm` (0.11.0 rejected `--pick` outside `global`/`cjs` entirely), which is
+what the three ESM consumers need — see below. Two consequences to keep in
+mind when editing `index.js`:
 
 - The tree-shaker roots a top-level declaration by **identifier occurrence
   anywhere in a kept chunk**, including local variables and object keys.
@@ -65,6 +67,34 @@ when editing `index.js`:
   the name is unavoidable; it costs modal-only builds ~2.4 KB.)
 - Any declaration whose text contains the sanitizer-policy marker prefix is
   a permanent root, so never spell that prefix in ordinary prose comments.
+
+## Consumers no longer need the `overrides` workaround
+
+`bin/vendor.mjs` is a shim: it runs whatever `@jfs/vendor-cli` resolves from
+**inside this package**, so the CLI a consumer gets is decided by THIS
+repo's `dependencies` pin — not by anything in the consumer's tree. (The pin
+belongs in `dependencies`, not `devDependencies`: a consumer installing
+news-kit gets its dependencies but not its devDependencies, so the shim
+would have nothing to load.)
+
+While that pin was `386e8eb` (0.11.0), which rejects `--pick` outside
+`--format global`/`cjs`, the three ESM consumers — Art-Gallery-,
+market-monitor, John's News — could only get a narrowed ESM copy by forcing
+the resolution from outside:
+
+```json
+"overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…#<0.12.0 sha>" } }
+```
+
+The pin is now `eba0518` (0.12.0), so **that `overrides` entry is dead
+weight once a consumer re-pins news-kit to this commit or later** — drop it
+in the same PR as the pin bump. Verified from a consumer's perspective: with
+no override at all, a throwaway install of this package resolves vendor-cli
+0.12.0 and `--format esm --pick …` succeeds; it also succeeds when the
+consumer carries an *older* vendor-cli at top level, because npm nests
+0.12.0 under news-kit and the shim resolves the nested copy.
+`test/vendor.test.js` pins the narrowed-esm behavior so a pin regression
+fails CI here rather than in three consumers' `vendor:sync`.
 
 <!-- jfs-family-conventions:start — managed by jfs-claude-md-sync; edit family/family-conventions.md in @jfs/vendor-cli -->
 
