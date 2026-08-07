@@ -19,6 +19,11 @@ jobs:
   family-ci:
     uses: jsvolos63/vendor-cli/.github/workflows/family-ci.yml@main
     with:
+      # The one @jfs pin here (dependencies.@jfs/vendor-cli) decides which CLI
+      # every consumer's `jfs-news-kit-vendor` runs — pre-flight that it
+      # resolves rather than failing opaquely at install time.
+      verify-kit-pins: true
+      install-command: npm install
       run: |
         node --check index.js
         npm run policy:check

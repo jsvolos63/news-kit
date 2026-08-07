@@ -12,7 +12,8 @@ runtime dependencies, single-file bundle (`index.js`).
 > behind effectively one public export. **Every name they exported is
 > exported here, unchanged** — a consumer migrates by repointing its
 > `vendor:sync` invocation at `jfs-news-kit-vendor`, not by editing call
-> sites. The old repos remain in place until every consumer has moved.
+> sites. Both old repos are now ARCHIVED on GitHub — every consumer has
+> moved, and neither pin exists anywhere in the family.
 > Because the vendoring CLI tree-shakes a narrowed build (`@jfs/vendor-cli`
 > 0.11.0+ for `global`/`cjs`, 0.12.0+ for `esm`), taking only `escapeHtml`
 > from this kit costs ~5 KB, not the whole bundle — see
@@ -143,8 +144,9 @@ from the outside:
 "overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…" } }
 ```
 
-The pin is 0.12.0 as of this release, so **that entry can be deleted once you
-re-pin `@jfs/news-kit` to this commit or later.** No override is needed even
+The pin is 0.14.0 as of this release, so **that entry can be deleted once you
+re-pin `@jfs/news-kit` to this commit or later** — and every consumer in the
+family already has. No override is needed even
 if your own tree carries an older `@jfs/vendor-cli` at top level: npm nests
 the correct copy under `@jfs/news-kit` and the shim resolves the nested one.
 

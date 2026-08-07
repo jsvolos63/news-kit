@@ -45,10 +45,11 @@
   "scripts": {
     "test": "node --test",
     "policy:sync": "jfs-sanitizer-policy-sync index.js",
-    "policy:check": "jfs-sanitizer-policy-sync --check index.js"
+    "policy:check": "jfs-sanitizer-policy-sync --check index.js",
+    "kit-pins:bump": "jfs-bump-kit-pins"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#e64511e8fb282a9173ab67d57baf5c1da3500d3b"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#a16f02751dadd9ac357c72c493595cb0f0e663d2"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"

@@ -10,13 +10,16 @@ bumps its pin and re-runs `vendor:sync`.
 
 ## This kit ABSORBED @jfs/dom-kit and @jfs/modal-kit (v0.12.0)
 
-Both are being retired into this repo. Per the family's own extraction bar —
+Both were retired into this repo. Per the family's own extraction bar —
 *prefer growing an existing kit over minting a new one* — three kits'
 permanent CI / pin / vendoring overhead was not buying anything: dom-kit's
 13 exports overlapped this kit's escaper and URL guards, and modal-kit was
-554 lines behind effectively ONE public export. The source repos stay in
-place until every consumer has migrated its imports; nothing in them should
-be edited in the meantime.
+554 lines behind effectively ONE public export.
+
+**That migration is complete.** Every consumer takes those exports off this
+kit, and `jsvolos63/dom-kit` / `jsvolos63/modal-kit` are ARCHIVED on GitHub —
+read-only history, no pins, no CI. The family is six kits now (news, pwa,
+netlify, fetch, cache, vendor-cli). Never re-add either pin.
 
 What the merge did:
 
@@ -86,15 +89,26 @@ the resolution from outside:
 "overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…#<0.12.0 sha>" } }
 ```
 
-The pin is now `e64511e` (0.13.0), so **that `overrides` entry is dead
-weight once a consumer re-pins news-kit to this commit or later** — drop it
-in the same PR as the pin bump. Verified from a consumer's perspective: with
+The pin is now `a16f027` (0.14.0), so **that `overrides` entry is dead
+weight once a consumer re-pins news-kit to this commit or later** — and
+every consumer has dropped it; don't let one back in. Verified from a
+consumer's perspective: with
 no override at all, a throwaway install of this package resolves a
 `--pick`-in-esm-capable vendor-cli and `--format esm --pick …` succeeds; it
 also succeeds when the consumer carries an *older* vendor-cli at top level,
 because npm nests this one under news-kit and the shim resolves the nested
 copy. `test/vendor.test.js` pins the narrowed-esm behavior so a pin
 regression fails CI here rather than in three consumers' `vendor:sync`.
+
+Because that pin decides what every consumer vendors, it gets the same
+weekly bumper the consumer repos run: `.github/workflows/kit-pin-bump.yml`
+(the family reusable workflow, `kit-pins:bump` → `jfs-bump-kit-pins`, which
+scans `dependencies` as well as `devDependencies`). There was no such
+workflow at first, which is how the pin sat at 0.13.0 while vendor-cli
+shipped 0.14.0 — the only @jfs pin in the family nothing watched. `verify-kit-pins: true` in
+`test.yml` pre-flights that it still resolves. No `vendor:sync` and no
+version bump run in that workflow: this kit's semver tracks `index.js` +
+`bin`, which a CLI pin bump doesn't touch.
 
 ### 0.13.0 shrinks every narrowed build by exactly 131 B
 
