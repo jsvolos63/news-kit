@@ -52,7 +52,12 @@ test('dedupeItems collapses duplicates, keeps earliest date + best signal', () =
 });
 
 test('mergeItems never lets an empty fresh fetch blank previous items', () => {
-  const prev = [{ title: 'Old story', url: 'u1', published_at: '2026-06-17T00:00:00Z' }];
+  // Relative date, like the cutoff test below: a fixed ISO timestamp ages
+  // past mergeItems' 60-day cutoff and turns the test into a time bomb (it
+  // went red exactly 60 days after the date it hard-coded).
+  const prev = [
+    { title: 'Old story', url: 'u1', published_at: new Date(Date.now() - 2 * 86400000).toISOString() },
+  ];
   const merged = mergeItems(prev, [], { cap: 10 });
   assert.equal(merged.length, 1);
   assert.equal(merged[0].url, 'u1');
