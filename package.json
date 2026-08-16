@@ -49,7 +49,7 @@
     "kit-pins:bump": "jfs-bump-kit-pins"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#47b66636d15f439e3a6ce90d0e72577e1a53e14a"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#e2f2476a92061b3a5268cb87b5ddac5ee179bf86"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"
