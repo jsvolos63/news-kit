@@ -18,8 +18,9 @@ permanent CI / pin / vendoring overhead was not buying anything: dom-kit's
 
 **That migration is complete.** Every consumer takes those exports off this
 kit, and `jsvolos63/dom-kit` / `jsvolos63/modal-kit` are ARCHIVED on GitHub —
-read-only history, no pins, no CI. The family is six kits now (news, pwa,
-netlify, fetch, cache, vendor-cli). Never re-add either pin.
+read-only history, no pins, no CI. The family is five kits now (news, pwa,
+netlify, fetch, vendor-cli — cache-kit has since been absorbed into
+fetch-kit v0.2.0 and retired the same way). Never re-add either pin.
 
 What the merge did:
 
