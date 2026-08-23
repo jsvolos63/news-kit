@@ -180,7 +180,12 @@ export function makeClassifier(buckets, fallback = 'general') {
 }
 
 /** Default classifier using the Surf-Tracker buckets. */
-export const classify = makeClassifier(DEFAULT_SIGNALS, 'general');
+// The @__PURE__ annotation is load-bearing: a top-level CALL is a potential
+// side effect, so without it esbuild keeps this line — and through it
+// makeClassifier and DEFAULT_SIGNALS — in every narrowed vendored build,
+// even ones that pick none of the three (~1 KB of dead classifier shipped
+// in Art-Gallery-'s 4-export copy before this).
+export const classify = /* @__PURE__ */ makeClassifier(DEFAULT_SIGNALS, 'general');
 
 /**
  * Map a signal to its sort priority. Unknown/missing signals sort last.
@@ -2262,7 +2267,10 @@ let lockedClass = null;
 const historyStack = [];
 
 // The standard focusable set, plus contenteditable and positive-tabindex nodes.
-const FOCUSABLE_SELECTOR = [
+// @__PURE__ for the same reason as `classify` above: .join() is a top-level
+// call, and without the annotation every narrowed build that skips the modal
+// section still ships this selector.
+const FOCUSABLE_SELECTOR = /* @__PURE__ */ [
   'a[href]',
   'area[href]',
   'button:not([disabled])',

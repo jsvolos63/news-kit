@@ -1,6 +1,6 @@
 {
   "name": "@jfs/news-kit",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Shared, dependency-free news + DOM primitives (RSS parsing, dedupe, classification, HTML escaping, URL guards, whitelist HTML sanitizers, an auto-escaping element builder, relative time, news-river rendering, source-menu, and accessible modal plumbing) extracted from the JFS family of apps. Absorbs @jfs/dom-kit and @jfs/modal-kit.",
   "type": "module",
   "license": "MIT",
