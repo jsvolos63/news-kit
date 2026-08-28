@@ -31,33 +31,38 @@ runtime dependencies, single-file bundle (`index.js`).
 | time | `relativeTime` | "just now" / "3m ago" / "2h ago" / "Jun 16"; `now` injectable for tests. |
 | render-river | `renderNewsRiver`, `renderNewsRiverSkeletons`, `newsRiverCard`, `riverDayLabel`, `riverCoarseGroupLabel`, `ensureNewsRiverStyles`, `dedupedNewsSummary`, `isStandaloneDisplay`, `NEWS_RIVER_CSS` | The John's News river presentation: day-grouped article cards (source label + relative time + optional favicon/chip, FULL TEXT / DEEP LINK badge, serif headline, clamped summary, byline, lazy thumbnail, per-source accents). DOM-node rendering (feed text never parsed as HTML; URLs pass `safeContentUrl`). Styles install once via constructed stylesheet (CSP-safe) with a `<style>` fallback; themable through `--nk-*` variables declared at zero specificity. **Deep-link rule:** headlines with URLs stay plain anchors — `onOpen(item, e)` sees only unmodified left-clicks and returning `false` lets the tap navigate so iOS universal links open the publisher's own app (NYT, Economist, …). External links carry `target="_blank"` in a browser tab, but when the page runs as an installed app (standalone display, detected via `isStandaloneDisplay`, overridable with `opts.standalone`) they navigate the current context instead — `_blank` there spawns a launch window that outlives the universal-link handoff, stranding the reader on an orphaned window when they close the publisher's app. Deks are deduped by default: a summary that merely repeats the headline is dropped, and a body that opens by repeating it keeps only the trailing prose (`dedupedNewsSummary` is exported so apps with their own renderers share the policy; `opts.dedupeSummary === false` opts out). Cold loads paint `renderNewsRiverSkeletons` — fixed-height placeholder cards that reserve the river's space so the swap to content can't shift the page (skeletons are only for an empty river; cached/last-good items should stay visible through a refresh). Long-window feeds can swap the day labeler via `opts.groupLabel` (`riverCoarseGroupLabel`: Today / Yesterday / Earlier this week / Earlier this month / Older). Browser-only. |
 | source-menu | `createSourceMenu`, `countBySource`, `ensureSourceMenuStyles`, `SOURCE_MENU_CSS` | The John's News / BearsMockDraft Sources sheet, extracted as the family's shared filter. Two controls per row that never share a code path: the source **name** drills down (session-only pin — the app closes its sheet on `reason === 'drill'`), the **checkbox** builds a localStorage-persisted multi-select (sheet stays open, refilters live). Rows sort busiest-first with per-source counts; persisted-but-absent sources render at count 0 so they can still be unchecked; storage failures degrade to "all sources". Container-agnostic: the app owns the modal/sheet, the kit renders the trigger button (`renderButton`) and rows (`renderMenu`) and answers `filterItems()`. |
-| dom (absorbed from @jfs/dom-kit) | `safeUrl`, `safeImageUrl`, `sanitizeUrl`, `sanitizeHref`, `el`, `elem`, `byId`, `$`, `$$`, `sanitizeHtml` | The generic DOM-safety layer. **Four URL guards that are NOT interchangeable** — see [URL guards](#url-guards-six-contracts-not-one). `el(tag, attrs, ...children)` is the auto-escaping element builder (string children become text nodes, `on*` attribute names are refused, `on:` takes real listeners); `elem` is the Weather-compatible 3-arg wrapper; `byId` / `$` / `$$` are query shorthands. `sanitizeHtml(html)` is the STRING-returning whitelist sanitizer (small inline-formatting allowlist, blocked subtrees dropped, unknown tags unwrapped, `href` through `safeUrl` + `noopener`); it shares the family's policy-owned blocked-tag list with `sanitizeHtmlToFragment` rather than mirroring it. Browser-only. |
+| dom (absorbed from @jfs/dom-kit) | `safeUrl`, `safeImageUrl`, `el`, `elem`, `byId`, `$`, `$$`, `sanitizeHtml` | The generic DOM-safety layer. **The URL guards are NOT interchangeable** — see [URL guards](#url-guards-four-contracts-not-one). `el(tag, attrs, ...children)` is the auto-escaping element builder (string children become text nodes, `on*` attribute names are refused, `on:` takes real listeners); `elem` is the Weather-compatible 3-arg wrapper; `byId` / `$` / `$$` are query shorthands. `sanitizeHtml(html)` is the STRING-returning whitelist sanitizer (small inline-formatting allowlist, blocked subtrees dropped, unknown tags unwrapped, `href` through `safeUrl` + `noopener`); it shares the family's policy-owned blocked-tag list with `sanitizeHtmlToFragment` rather than mirroring it. Browser-only. |
 | modal (absorbed from @jfs/modal-kit) | `createModal`, `getFocusable`, `isAnyModalOpen`, `_resetModalsForTest` | Accessible dialog plumbing: focus trap + focus save/restore, iOS-safe `position:fixed` scroll-lock (reference-counted), a central Escape stack, marker-guarded depth-counted `inert`/`aria-hidden` siblings, bfcache (`pagehide`) cleanup, and an opt-in history sentinel so Back / iOS edge-swipe closes the topmost dialog. `createModal(el, opts)` returns `{ open, close, isOpen }`; `onOpen`/`onClose` receive `{ el }`. The shared document/window handlers are wired LAZILY on the first `open()` — importing the kit registers nothing, which is what keeps `"sideEffects": false` true. Browser-only at call time. |
 | sanitize-html | `sanitizeHtmlToFragment`, `isSafeContentUrl`, `isSafeSrcset` | Allowlist rebuild sanitizer for article readers, returning a `DocumentFragment`: ALLOWED kept, BLOCKED removed with subtree, unknown tags **unwrapped** (children kept). Browser-only (`sanitizeHtmlToFragment` throws without a DOM); the URL policy (`isSafeContentUrl`, `isSafeSrcset`) is pure and Node-testable, and injectable via `options.safeUrl` for readers that need a stricter per-URL policy than the permissive default `isSafeContentUrl`. |
 
-### URL guards: six contracts, not one
+### URL guards: four contracts, not one
 
-The merge brought six URL guards into one file. **None of them are
-interchangeable**, and a differential run found all fifteen pairs differing
-on real inputs, so they each kept their own implementation:
+Four URL guards live in this kit. **None of them are interchangeable**, and
+a differential run found every pair differing on real inputs, so they each
+keep their own implementation:
 
 | Guard | Returns | Rejects to | Allows |
 |---|---|---|---|
 | `safeUrl(u)` | string | `"#"` | http(s), `mailto:`, protocol-relative (→ `https:`), relative `/` `#` `?` |
 | `safeImageUrl(u)` | string | `""` | http(s), protocol-relative (→ `https:`), `blob:`, `data:image/*`. **No relative paths.** `<img src>` ONLY — never `<object>`/`<embed>`/`<iframe>` |
-| `sanitizeUrl(u)` | string, **HTML-escaped** | `""` | `new URL()` + http(s) only. For innerHTML interpolation |
-| `sanitizeHref(u)` | string, verbatim | `""` | `new URL()` + http(s) only. For `setAttribute` / `.href` / `.src` |
-| `safeContentUrl(u)` | string \| `null` | `null` | as `sanitizeHref`, but **requires a string input** |
+| `safeContentUrl(u)` | string \| `null` | `null` | `new URL()` + http(s) only, normalized href, **requires a string input**. The river renderer's own guard |
 | `isSafeContentUrl(u)` | boolean | `false` | permissive feed-content predicate: absolute http(s), protocol-relative, root-relative **and bare relative text** |
 
 Worked examples of the divergence:
 
-| input | `safeUrl` | `safeImageUrl` | `sanitizeUrl` | `sanitizeHref` | `safeContentUrl` | `isSafeContentUrl` |
-|---|---|---|---|---|---|---|
-| `//evil.com/x` | `https://evil.com/x` | `https://evil.com/x` | `""` | `""` | `null` | `true` |
-| `/root/rel` | `/root/rel` | `""` | `""` | `""` | `null` | `true` |
-| `mailto:a@b.c` | `mailto:a@b.c` | `""` | `""` | `""` | `null` | `false` |
-| `data:image/png;base64,…` | `"#"` | kept | `""` | `""` | `null` | `false` |
+| input | `safeUrl` | `safeImageUrl` | `safeContentUrl` | `isSafeContentUrl` |
+|---|---|---|---|---|
+| `//evil.com/x` | `https://evil.com/x` | `https://evil.com/x` | `null` | `true` |
+| `/root/rel` | `/root/rel` | `""` | `null` | `true` |
+| `mailto:a@b.c` | `mailto:a@b.c` | `""` | `null` | `false` |
+| `data:image/png;base64,…` | `"#"` | kept | `null` | `false` |
+
+Two more guards — `sanitizeUrl` (HTML-escaped normalized href, for innerHTML
+interpolation) and `sanitizeHref` (the same, verbatim, for
+`setAttribute`/`.href`/`.src`) — were retired to their single consumer in
+v0.13.0: only JFS-Sports ever imported them and nothing in the kit called
+them, so they live as app-owned copies in its `helpers.js`. Don't re-add
+them without a second consumer.
 | `http://x/?a=1&b=2` | verbatim | verbatim | `…&amp;b=2` | `…&b=2` | `…&b=2` | `true` |
 
 `test/escape-dedup.test.js` pins every row. Do not unify them.

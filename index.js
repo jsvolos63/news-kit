@@ -72,15 +72,17 @@ function safeFromCodePoint(cp) {
 //
 // Consolidates the four near-identical copies across the repos:
 //   - market-monitor  js/utils/escape.js  (escHtml, safeUrl)
-//   - JFS-Sports      helpers.js          (escapeHtml, sanitizeUrl, sanitizeHref)
+//   - JFS-Sports      helpers.js          (escapeHtml — its sanitizeUrl /
+//                     sanitizeHref pair moved back there in v0.13.0, being
+//                     that app's alone; see the `dom` section)
 //   - BearsMockDraft  js/shared.js        (escapeText, escapeAttr, safeUrl)
 //
-// JFS-Sports is the only one that correctly splits the two URL use-cases, and
-// the DOM-API side of that split is preserved here:
+// The DOM-API-vs-innerHTML split JFS-Sports pioneered survives here as:
 //   - safeContentUrl()     -> normalized href string, NOT HTML-escaped. Use for
 //                             the DOM APIs (setAttribute('href', ...), .href,
 //                             .src) where the browser stores the value
-//                             verbatim; escaping would double-encode `&`.
+//                             verbatim; escaping would double-encode `&`. The
+//                             river renderer's own guard for item urls.
 //
 // ABSORBED FROM @jfs/dom-kit (v0.3.3): dom-kit's `escapeHtml` and news-kit's
 // `escHtml` were VERIFIED byte-identical in behavior — a differential run over
@@ -90,13 +92,13 @@ function safeFromCodePoint(cp) {
 // single-pass table+regex form survives; `escHtml` and `escAttr` are aliases
 // of it, so every consumer's existing import keeps working.
 //
-// The URL guards were NOT collapsed: all fifteen pairs among safeUrl /
-// safeImageUrl / sanitizeUrl / sanitizeHref / safeContentUrl / isSafeContentUrl
-// differ on real inputs (reject sentinel `#` vs `''` vs `null` vs `false`,
-// relative-URL policy, `new URL()` normalization, HTML-escaping of `&`,
-// data:image and blob: allowances). They keep their own implementations and
-// their own contracts — see the `dom` section below for the guard-by-guard
-// comparison.
+// The remaining URL guards were NOT collapsed: every pair among safeUrl /
+// safeImageUrl / safeContentUrl / isSafeContentUrl differs on real inputs
+// (reject sentinel `#` vs `''` vs `null` vs `false`, relative-URL policy,
+// `new URL()` normalization, data:image and blob: allowances). They keep
+// their own implementations and their own contracts — see the `dom` section
+// below for the guard-by-guard comparison and for which two guards were
+// retired to their single consumer.
 
 // All five HTML-significant characters. The textContent → innerHTML trick
 // only escapes <, >, & — quotes are left untouched, which is unsafe in
@@ -120,13 +122,11 @@ export function escapeHtml(str) {
   const s = typeof str === 'string' ? str : String(str);
   return s.replace(HTML_ESCAPE_REGEX, (ch) => HTML_ESCAPES[ch]);
 }
-// Aliases — market-monitor uses escHtml/escAttr, JFS-Sports uses escapeHtml,
-// news-kit's own consumers use escHtml. One implementation, three names.
-export { escapeHtml as escHtml, escapeHtml as escAttr };
 
 /** Validate a URL and return its normalized absolute href, or null when it is
  *  not a syntactically valid http(s) URL. Blocks javascript:, data:, vbscript:,
- *  mailto:, relative paths, credentials and non-standard schemes. */
+ *  mailto:, relative paths, credentials and non-standard schemes. The river
+ *  renderer runs every item url/icon/image through this before rendering. */
 export function safeContentUrl(u) {
   if (!u || typeof u !== 'string') return null;
   let parsed;
@@ -138,6 +138,9 @@ export function safeContentUrl(u) {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
   return parsed.href;
 }
+// Aliases — market-monitor uses escHtml/escAttr, JFS-Sports uses escapeHtml,
+// news-kit's own consumers use escHtml. One implementation, three names.
+export { escapeHtml as escHtml, escapeHtml as escAttr };
 
 // ===================== classify =====================
 // Keyword classification into signal buckets.
@@ -1859,21 +1862,16 @@ function srcNode(doc, tag, className, ...children) {
 //
 //   Group A — PURE (no DOM): the escaper (see the `escape` section — ONE
 //     implementation now, exported as escapeHtml / escHtml / escAttr) plus the
-//     URL guards safeUrl, safeImageUrl, sanitizeUrl, sanitizeHref.
+//     URL guards safeUrl and safeImageUrl.
 //
 //   Group B — DOM-dependent: el / elem, byId, $ / $$, sanitizeHtml. These
 //     reach for `document` / `DOMParser`, which the browser supplies at
 //     runtime (and a DOM shim supplies in tests). This module imports
 //     NOTHING — it stays dependency-free at install time.
 //
-// Compatibility-superset rule: the sibling apps grew slightly different
-// helpers for the same idea, so they adopt the kit by changing IMPORT PATHS,
-// not call sites. That means we keep BOTH URL-guard fallbacks (safeUrl → "#",
-// sanitizeUrl → "") byte-for-byte like their origins.
-//
-// WHY THE URL GUARDS ARE NOT DEDUPLICATED. Six guards now live in this file
-// and NONE of them are interchangeable — a differential run over a shared
-// corpus found all fifteen pairs differing on real inputs:
+// FOUR URL guards live in this file, each with a distinct contract — none
+// interchangeable (a differential run over a shared corpus found every pair
+// differing on real inputs):
 //
 //   safeUrl(u)           -> string, rejects to "#". Allows http(s), mailto:,
 //                           protocol-relative (rewritten to https:), and
@@ -1881,38 +1879,40 @@ function srcNode(doc, tag, className, ...children) {
 //   safeImageUrl(u)      -> string, rejects to "". Allows http(s),
 //                           protocol-relative (→ https:), blob:, data:image/*.
 //                           NO relative paths. For <img src> ONLY.
-//   sanitizeUrl(u)       -> string, rejects to "". new URL() + http(s) only,
-//                           returns the normalized href HTML-ESCAPED
-//                           (`&` → `&amp;`). For innerHTML interpolation.
-//   sanitizeHref(u)      -> string, rejects to "". Same parse/whitelist as
-//                           sanitizeUrl but NOT HTML-escaped. For setAttribute
-//                           / .href / .src, where escaping would over-encode.
-//   safeContentUrl(u)    -> string|null, rejects to null. Same parse/whitelist
-//                           as sanitizeHref, but ALSO requires a string input
-//                           (`safeContentUrl(new URL(...))` → null, whereas
-//                           `sanitizeHref(new URL(...))` → the href) and
-//                           signals reject with null rather than "".
+//   safeContentUrl(u)    -> string|null. `new URL()` parse, http(s) only,
+//                           returns the normalized href or null. The river
+//                           renderer's own guard for item url/icon/image
+//                           (defined in the `escape` section).
 //   isSafeContentUrl(u)  -> boolean. Permissive feed-content predicate: allows
 //                           absolute http(s), protocol-relative, root-relative
 //                           AND bare relative text; rejects anything else
-//                           carrying a scheme.
+//                           carrying a scheme. (Defined in the sanitize
+//                           section; it is that sanitizer's default policy.)
 //
-// Concrete divergences that make a silent unification a security/behavior
-// change rather than a refactor:
+// Concrete divergences:
 //   "//evil.com/x"  → safeUrl "https://evil.com/x" | safeImageUrl
-//                     "https://evil.com/x" | sanitizeUrl "" | sanitizeHref ""
-//                     | safeContentUrl null | isSafeContentUrl true
-//   "/root/rel"     → safeUrl "/root/rel" | safeImageUrl "" | isSafeContentUrl
-//                     true | the three URL()-parsing guards reject
-//   "mailto:a@b.c"  → safeUrl "mailto:a@b.c" | everything else rejects
-//   "data:image/png;base64,AAA" → safeImageUrl keeps it | everything else
-//                     rejects (this is exactly why safeImageUrl is <img>-only)
-//   "http://x/?a=1&b=2" → sanitizeUrl "…&amp;b=2" | sanitizeHref /
-//                     safeContentUrl "…&b=2"
+//                     "https://evil.com/x" | safeContentUrl null |
+//                     isSafeContentUrl true
+//   "/root/rel"     → safeUrl "/root/rel" | safeImageUrl "" | safeContentUrl
+//                     null | isSafeContentUrl true
+//   "mailto:a@b.c"  → safeUrl "mailto:a@b.c" | the others reject
+//   "data:image/png;base64,AAA" → safeImageUrl keeps it | the others reject
+//                     (this is exactly why safeImageUrl is <img>-only)
 //
-// The ONE pair that WAS collapsed is the escaper: dom-kit's escapeHtml and
-// news-kit's escHtml agreed on all 85,683 differential inputs, so there is a
-// single implementation with both names (plus escAttr) exported.
+// The kit used to carry SIX guards. sanitizeUrl and sanitizeHref were
+// retired in v0.13.0: each had exactly ONE consumer (JFS-Sports) and no
+// internal caller — preserved per-repo idiom, not independent contracts.
+// JFS-Sports owns byte-faithful copies in its helpers.js now (sanitizeHref
+// is the `new URL()` http(s) whitelist returning the normalized href;
+// sanitizeUrl is escapeHtml over it). The family bar says a single
+// consumer's helper belongs in the app — don't re-add them here without a
+// second consumer. (safeContentUrl looked single-consumer too, but the
+// river renderer itself calls it, which is why it stays.)
+//
+// The ONE pair that WAS collapsed outright is the escaper: dom-kit's
+// escapeHtml and news-kit's escHtml agreed on all 85,683 differential inputs,
+// so there is a single implementation with both names (plus escAttr)
+// exported.
 
 /**
  * Art-Gallery URL guard. Allows http(s):, mailto:, protocol-relative
@@ -1956,48 +1956,6 @@ export function safeImageUrl(url) {
   if (lower.startsWith('blob:')) return s;
   if (lower.startsWith('data:image/')) return s;
   return '';
-}
-
-/**
- * JFS-Sports URL sanitizer for innerHTML interpolation. Parses with `new
- * URL()`, whitelists http(s) only, and returns the HTML-ESCAPED normalized
- * href. Reject / parse-fail → `""`.
- *
- * Whitelist (not blacklist) so a future protocol can't slip through a missing
- * branch. u.href is the parsed/normalised form; escapeHtml additionally
- * encodes & → &amp; for valid HTML attributes.
- */
-export function sanitizeUrl(url) {
-  if (!url) return '';
-  try {
-    const u = new URL(url);
-    if (u.protocol === 'https:' || u.protocol === 'http:') return escapeHtml(u.href);
-    return '';
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Like sanitizeUrl, but returns the URL WITHOUT HTML-attribute escaping. Use
- * when passing the value through setAttribute / element.src / element.href,
- * where the DOM stores the attribute verbatim and HTML escaping would
- * over-encode characters like `&` (`http://x.com/?a=1&b=2` → broken).
- * Reject / parse-fail → `""`.
- *
- * Differs from safeContentUrl only in its reject sentinel ("" vs null) and in
- * accepting any `new URL()`-coercible value (a URL object, say) rather than
- * requiring a string — which is why both survive the merge.
- */
-export function sanitizeHref(url) {
-  if (!url) return '';
-  try {
-    const u = new URL(url);
-    if (u.protocol === 'https:' || u.protocol === 'http:') return u.href;
-    return '';
-  } catch {
-    return '';
-  }
 }
 
 // ---------------------------------------------------------------------------

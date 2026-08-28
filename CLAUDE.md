@@ -30,14 +30,17 @@ What the merge did:
   fuzzed strings). They are now ONE function exported under all three names
   — `escapeHtml`, `escHtml`, `escAttr` — so no consumer's import changes.
   `test/escape-dedup.test.js` keeps the proof executable.
-- **Six URL guards, none collapsed.** `safeUrl`, `safeImageUrl`,
-  `sanitizeUrl`, `sanitizeHref`, `safeContentUrl` and `isSafeContentUrl`
-  differ pairwise on real inputs (reject sentinel `#` / `''` / `null` /
-  `false`, relative-URL policy, `new URL()` normalization, HTML-escaping of
-  `&`, `data:image` and `blob:` allowances). Unifying any pair would be a
-  security change, not a refactor; the divergences are documented in the
-  `dom` section of `index.js` and pinned by tests. **Do not "simplify" them
-  into one.**
+- **Four URL guards, none collapsed** (v0.13.0 — it was six). `safeUrl`,
+  `safeImageUrl`, `safeContentUrl` and `isSafeContentUrl` differ pairwise on
+  real inputs (reject sentinel `#` / `''` / `null` / `false`, relative-URL
+  policy, `new URL()` normalization, `data:image` and `blob:` allowances).
+  Unifying any pair would be a security change, not a refactor; the
+  divergences are documented in the `dom` section of `index.js` and pinned
+  by tests. The two that WERE retired — `sanitizeUrl` / `sanitizeHref` —
+  went back to JFS-Sports, their only consumer ever (no internal caller):
+  preserved per-repo idiom, not contracts this kit needed. `safeContentUrl`
+  looked single-consumer too, but the river renderer itself calls it — check
+  internal callers, not just consumer imports, before retiring an export.
 - **Two sanitizers, both kept.** `sanitizeHtml` returns a STRING with the
   smaller dom-kit allowlist; `sanitizeHtmlToFragment` returns a
   `DocumentFragment` with the article-reader allowlist and an injectable URL
@@ -60,17 +63,22 @@ Since `@jfs/vendor-cli` 0.11.0 a `--pick`/`--global`-narrowed build is
 tree-shaken to the reachable body, so a consumer that only wants the escaper
 ships ~5 KB, not the 113 KB full bundle. 0.12.0 extends that to `--format
 esm` (0.11.0 rejected `--pick` outside `global`/`cjs` entirely), which is
-what the three ESM consumers need — see below. Two consequences to keep in
-mind when editing `index.js`:
+what the three ESM consumers need — see below. Two historical constraints on
+editing `index.js` have LAPSED and should not be re-imposed:
 
-- The tree-shaker roots a top-level declaration by **identifier occurrence
-  anywhere in a kept chunk**, including local variables and object keys.
-  That is why nothing in this file uses `el` as a local binding — a local
-  `el` would drag the exported `el()` builder into every narrowed build.
-  (The modal section's `{ el: dialogEl }` callback payload is the one place
-  the name is unavoidable; it costs modal-only builds ~2.4 KB.)
-- Any declaration whose text contains the sanitizer-policy marker prefix is
-  a permanent root, so never spell that prefix in ordinary prose comments.
+- The old hand-written shaker rooted a declaration by identifier occurrence
+  anywhere in a kept chunk, which is why this file avoids `el` as a local
+  binding name. Since vendor-cli 0.16.0 the reachability analysis is
+  esbuild's real binding analysis, so a local `el` no longer drags the
+  exported builder in — the naming discipline survives only as style.
+- Sanitizer-policy marker regions used to be permanent tree-shake roots,
+  preserved byte-exact in narrowed builds by a graft pass. vendor-cli 0.20.0
+  retired that: a narrowed build treats policy code like any other code
+  (unreachable regions drop; reachable ones are reprinted with their values,
+  markers stripped). The canonical values are guarded at the SOURCE — this
+  repo's own `policy:check` in CI — and full-surface copies stay verbatim
+  and generation-gated, so nothing changes about how you edit the regions
+  here: only through `jfs-sanitizer-policy-sync`.
 
 ## Consumers no longer need the `overrides` workaround
 

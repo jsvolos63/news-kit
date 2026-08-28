@@ -23,7 +23,7 @@ globalThis.DOMParser = DOMParser;
 
 const {
     escapeHtml, escHtml, escAttr,
-    safeUrl, safeImageUrl, sanitizeUrl, sanitizeHref,
+    safeUrl, safeImageUrl,
     el, elem, byId, $, $$, sanitizeHtml,
 } = await import('../index.js');
 
@@ -92,29 +92,6 @@ test('safeImageUrl allows http(s), protocol-relative, blob:; rejects mailto/js',
 test('safeImageUrl strips C0 controls + DEL before scheme checks', () => {
     assert.equal(safeImageUrl('data:\ttext/html,<script>'), '');
     assert.equal(safeImageUrl('data:image\u0000/png;base64,AA'), 'data:image/png;base64,AA');
-});
-
-// --- sanitizeUrl (JFS semantics: HTML-escaped, reject → "") ----------------
-test('sanitizeUrl rejects mailto: (http(s) only) → ""', () => {
-    assert.equal(sanitizeUrl('mailto:a@b.com'), '');
-    assert.equal(sanitizeUrl('javascript:alert(1)'), '');
-    assert.equal(sanitizeUrl('not a url'), '');
-});
-test('sanitizeUrl HTML-escapes & in query strings', () => {
-    assert.equal(sanitizeUrl('http://x.com/?a=1&b=2'), 'http://x.com/?a=1&amp;b=2');
-});
-test('sanitizeUrl falsy → ""', () => {
-    assert.equal(sanitizeUrl(''), '');
-    assert.equal(sanitizeUrl(null), '');
-});
-
-// --- sanitizeHref (verbatim, reject → "") ----------------------------------
-test('sanitizeHref keeps & verbatim (no HTML escaping)', () => {
-    assert.equal(sanitizeHref('http://x.com/?a=1&b=2'), 'http://x.com/?a=1&b=2');
-});
-test('sanitizeHref rejects non-http(s) → ""', () => {
-    assert.equal(sanitizeHref('mailto:a@b.com'), '');
-    assert.equal(sanitizeHref('javascript:alert(1)'), '');
 });
 
 // --- Group B — DOM-dependent helpers ----------------------------------------
