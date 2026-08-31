@@ -26,6 +26,7 @@ jobs:
       install-command: npm install
       run: |
         node --check index.js
+        npm run lint
         npm run policy:check
         npm test
       version-guard-paths: index.js bin

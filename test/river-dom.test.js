@@ -151,7 +151,7 @@ test('onOpen intercepts plain clicks, honors `false` (deep link), ignores modifi
   const card = newsRiverCard({ title: 'T', url: 'https://example.com/a' }, {
     doc: window.document,
     now: NOW,
-    onOpen: (item, e) => { calls.push(item.title); return allow ? false : undefined; },
+    onOpen: (item) => { calls.push(item.title); return allow ? false : undefined; },
   });
   window.document.body.appendChild(card);
   const a = card.querySelector('.nk-headline a');
