@@ -556,7 +556,7 @@ test('getFocusable excludes controls inside a display:none ancestor', () => {
 });
 
 test('getFocusable returns visible focusables in order and skips hidden/disabled', () => {
-  const { $, document } = setup(`
+  const { $ } = setup(`
     <div id="dialog">
       <button id="b1">1</button>
       <button id="b2" disabled>2</button>

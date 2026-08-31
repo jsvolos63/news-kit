@@ -558,7 +558,9 @@ export function dedupeItems(items) {
  */
 export function mergeItems(prevItems, freshItems, opts = {}) {
   const cutoffDays = opts.cutoffDays ?? 60;
-  const cap = opts.cap ?? 60;
+  // Named `limit`, not `cap`: the module-level cap() is a string truncator,
+  // and shadowing it with a count made both unreadable at a glance.
+  const limit = opts.cap ?? 60;
   const byUrl = new Map();
   for (const it of prevItems || []) if (it && it.url) byUrl.set(it.url, it);
   for (const it of freshItems || []) {
@@ -571,7 +573,7 @@ export function mergeItems(prevItems, freshItems, opts = {}) {
   );
   merged = dedupeItems(merged);
   merged.sort((a, b) => (Date.parse(b.published_at) || 0) - (Date.parse(a.published_at) || 0));
-  return merged.slice(0, cap);
+  return merged.slice(0, limit);
 }
 
 // ===================== time =====================
@@ -1224,7 +1226,7 @@ export function dedupedNewsSummary(title, summary) {
   // Article bodies that open by repeating the headline verbatim: keep only
   // the prose after it (when there's a meaningful amount).
   if (s.slice(0, t.length).toLowerCase() === t.toLowerCase()) {
-    const rest = s.slice(t.length).replace(/^[\s \-–—:.,;!?…]+/, '');
+    const rest = s.slice(t.length).replace(/^[\s\u00A0\-–—:.,;!?…]+/, '');
     return norm(rest).length >= 24 ? rest : '';
   }
   // Normalized-prefix overlap without a verbatim match (punctuation/casing

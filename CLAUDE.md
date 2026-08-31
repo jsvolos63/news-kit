@@ -140,6 +140,35 @@ Consumers therefore see a byte change on their next `vendor:sync`, so a
 re-vendor needs the usual site version bump; nothing they import changes
 behavior.
 
+## Lint
+
+`npm run lint` (ESLint flat config, `eslint.config.mjs`); CI runs it. This kit
+was the family's widest-blast-radius code with **no linter at all** — a bug
+here reaches every consumer's vendored copy on their next pin bump, and that
+copy lands as bundler output nobody reads line by line.
+
+Adopting it surfaced eight findings; four were real and are fixed, and two
+RULES are off because they fire on this kit's whole reason for existing:
+
+- **`no-control-regex` is off.** Stripping C0/C1 control characters out of
+  URLs is exactly what the guards here do, so the rule flags the security code
+  rather than a mistake — and one of its two hits is inside the generated
+  `@jfs-sanitizer-policy:url-control-chars` region, which may only ever change
+  through `jfs-sanitizer-policy-sync`. Turning the rule on would invite
+  someone to hand-edit a canonical region to silence a linter.
+- **`no-regex-spaces` is off.** `test/vendor.test.js` matches a known
+  two-space indent in generated output; the literal reads better than `{2}`.
+
+The four real fixes: a `cap` shadow in `mergeItems` (a module-level string
+truncator hidden by a local count — renamed to `limit`), a literal U+00A0
+NO-BREAK SPACE inside a character class in the headline splitter (now written
+as `\u00A0`, behaviour-identical but no longer invisible), and two unused
+bindings in the suite.
+
+Keep the disabled list this short. A third entry should feel like a decision,
+not a convenience — the point of the linter here is that nothing else reads
+this file closely.
+
 <!-- jfs-family-conventions:start — managed by jfs-claude-md-sync; edit family/family-conventions.md in @jfs/vendor-cli -->
 
 ## Family conventions
