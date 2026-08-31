@@ -140,8 +140,6 @@ Consumers therefore see a byte change on their next `vendor:sync`, so a
 re-vendor needs the usual site version bump; nothing they import changes
 behavior.
 
-<!-- jfs-family-conventions:start — managed by jfs-claude-md-sync; edit family/family-conventions.md in @jfs/vendor-cli -->
-
 ## Lint
 
 `npm run lint` (ESLint flat config, `eslint.config.mjs`); CI runs it. This kit
@@ -170,6 +168,8 @@ bindings in the suite.
 Keep the disabled list this short. A third entry should feel like a decision,
 not a convenience — the point of the linter here is that nothing else reads
 this file closely.
+
+<!-- jfs-family-conventions:start — managed by jfs-claude-md-sync; edit family/family-conventions.md in @jfs/vendor-cli -->
 
 ## Family conventions
 
