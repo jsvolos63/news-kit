@@ -162,3 +162,10 @@ test('TEMPLATE is blocked (removed with its subtree)', () => {
   const out = htmlOf(sanitizeHtmlToFragment('<p>keep</p><template><img src=x onerror=alert(1)></template>'));
   assert.equal(out, '<p>keep</p>');
 });
+
+test('sanitizeHtmlToFragment: an accepted URL is written without the control characters the check stripped', () => {
+    const frag = sanitizeHtmlToFragment('<a href="https://x.example/a\tb\n">x</a><img src="ht\ttps://x.example/i.png">');
+    const a = frag.querySelector('a');
+    assert.equal(a.getAttribute('href'), 'https://x.example/ab');
+    assert.equal(frag.querySelector('img').getAttribute('src'), 'https://x.example/i.png');
+});
