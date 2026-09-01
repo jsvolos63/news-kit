@@ -218,6 +218,24 @@ test('sanitizeHtml runs href through safeUrl + adds noopener on real links', () 
     assert.ok(/target="_blank"/i.test(good));
     assert.ok(good.includes('title="t"'));
 });
+test('sanitizeHtml: an author-supplied rel/target cannot strip the noopener it just added', () => {
+    // The attribute loop mutates in place while walking a snapshot of the
+    // SOURCE attributes, so a `rel="x"` that came after href used to fail
+    // the allowlist and remove the rel the href branch had installed —
+    // target="_blank" with no rel is reverse tabnabbing plus a Referer.
+    for (const html of [
+        '<a href="https://evil.example/" rel="x">x</a>',
+        '<a href="https://ok.example/" target="_self">x</a>',
+        '<a href="https://ok.example/" rel="a" target="b">x</a>',
+        '<a rel="x" href="https://ok.example/">x</a>',
+        '<a target="_top" rel="opener" href="https://ok.example/" title="t">x</a>',
+    ]) {
+        const out = sanitizeHtml(html);
+        assert.ok(/rel="noopener noreferrer"/i.test(out), html + ' → ' + out);
+        assert.ok(/target="_blank"/i.test(out), html + ' → ' + out);
+        assert.ok(!/rel="x"|rel="a"|rel="opener"|target="_self"|target="b"|target="_top"/i.test(out), out);
+    }
+});
 test('sanitizeHtml nullish/empty → ""', () => {
     assert.equal(sanitizeHtml(null), '');
     assert.equal(sanitizeHtml(''), '');

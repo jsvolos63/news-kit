@@ -83,3 +83,24 @@ test('caps never split a surrogate pair (emoji at the title boundary)', () => {
     '<link>https://example.com/t</link></item></channel></rss>');
   assert.equal(ok[0].title, 'Boom \u{1F4A5}');
 });
+
+test('the regex path stays linear on a feed full of unclosed tags', () => {
+  // rawTag's lazy `[\\s\\S]*?</tag>` restarted a scan-to-end at every
+  // unmatched open, nine times per item: 840 KB took 21 s and 3.9 MB never
+  // finished. The outer <item> scan was already an indexOf walk; the inner
+  // extractors are now the same shape.
+  const hostile = '<rss><channel><item>' + '<title>'.repeat(60_000) + '<link>'.repeat(20_000) + '</item></channel></rss>';
+  const started = Date.now();
+  const items = parseFeed(hostile, { max: 10 });
+  assert.ok(Array.isArray(items));
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started}ms`);
+});
+
+test('a well-formed feed reads the same through the indexOf extractors', () => {
+  const xml = '<rss><channel><item><title>Hello <![CDATA[<b>W</b>]]></title><link>https://x.example/a</link>' +
+    '<pubDate>Mon, 01 Jan 2026 00:00:00 GMT</pubDate><description>desc &amp; more</description></item></channel></rss>';
+  const [item] = parseFeed(xml);
+  assert.equal(item.url, 'https://x.example/a');
+  assert.ok(/Hello/.test(item.title));
+  assert.equal(item.summary, 'desc & more');
+});

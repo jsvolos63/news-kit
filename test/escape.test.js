@@ -19,6 +19,9 @@ test('safeContentUrl accepts http(s) and returns normalized href', () => {
 
 test('safeContentUrl rejects dangerous and relative URLs', () => {
   assert.equal(safeContentUrl('javascript:alert(1)'), null);
+  // The doc promised credentials were blocked; they are stripped, not kept.
+  assert.equal(safeContentUrl('https://user:pw@example.com/x'), 'https://example.com/x');
+  assert.equal(safeContentUrl('https://token@example.com/'), 'https://example.com/');
   assert.equal(safeContentUrl('data:text/html,x'), null);
   assert.equal(safeContentUrl('/relative/path'), null);
   assert.equal(safeContentUrl(''), null);

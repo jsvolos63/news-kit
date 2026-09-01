@@ -136,6 +136,14 @@ export function safeContentUrl(u) {
     return null;
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  // The doc above promised "credentials" were blocked; they were not —
+  // `https://user:pw@host/` came back intact, and this is the river's guard
+  // for feed-supplied item.url / icon / image. Strip rather than reject:
+  // the link is still a real link, it just carries no userinfo.
+  if (parsed.username || parsed.password) {
+    parsed.username = '';
+    parsed.password = '';
+  }
   return parsed.href;
 }
 // Aliases — market-monitor uses escHtml/escAttr, JFS-Sports uses escapeHtml,
@@ -366,11 +374,25 @@ function decodedText(block, tags) {
   return decodeEntities(decodeCdata(rawTag(block, tags))).trim();
 }
 
+// Open tag by regex, close tag by indexOf — the same shape the outer <item>
+// scan uses, and for the same reason: a lazy `[\s\S]*?<\/tag>` restarts a
+// scan-to-end at every unmatched open, so N `<title>`s with no close were
+// quadratic, and this runs up to nine times per item. Measured: a 4 MB
+// feed inside MAX_FEED_BYTES did not finish in 100 s; it parses in
+// milliseconds now.
+function tagBody(block, tag) {
+  const open = new RegExp(`<${escapeRe(tag)}\\b[^>]*>`, 'i').exec(block);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const close = block.toLowerCase().indexOf(`</${tag.toLowerCase()}`, start);
+  if (close === -1) return null;
+  return block.slice(start, close);
+}
+
 function rawTag(block, tags) {
   for (const tag of tags) {
-    const re = new RegExp(`<${escapeRe(tag)}\\b[^>]*>([\\s\\S]*?)<\\/${escapeRe(tag)}>`, 'i');
-    const mm = re.exec(block);
-    if (mm && mm[1] != null) return mm[1];
+    const body = tagBody(block, tag);
+    if (body != null) return body;
   }
   return '';
 }
@@ -390,8 +412,8 @@ function regexLink(block) {
   }
   if (candidate) return candidate;
   // RSS: <link>...</link>
-  const rss = /<link\b[^>]*>([\s\S]*?)<\/link>/i.exec(block);
-  if (rss && rss[1]) return decodeEntities(decodeCdata(rss[1])).trim();
+  const rss = tagBody(block, 'link');
+  if (rss) return decodeEntities(decodeCdata(rss)).trim();
   return '';
 }
 
@@ -785,7 +807,10 @@ export function sanitizeHtmlToFragment(html, options = {}) {
     // both into "use this string or skip".
     urlOf: (raw) => {
       const v = (options.safeUrl || isSafeContentUrl)(raw);
-      if (v === true) return raw;
+      // A boolean validator vouches for the STRIPPED form (that is what it
+      // tested), so that is what goes into the attribute — the raw string
+      // would carry the control characters the scheme check ignored.
+      if (v === true) return String(raw).replace(URL_CONTROL_CHARS, '').trim();
       if (typeof v === 'string' && v) return v;
       return null;
     },
@@ -2130,21 +2155,29 @@ function _scrub(node, depth = 0) {
         continue;
       }
       const allowed = _ALLOWED_ATTRS[tag] || new Set();
+      let href = null;
       for (const attr of Array.from(child.attributes)) {
         const name = attr.name.toLowerCase();
         if (!allowed.has(name)) {
           child.removeAttribute(attr.name);
           continue;
         }
-        if (name === 'href') {
-          const safe = safeUrl(attr.value);
-          child.setAttribute('href', safe);
-          // Anchor links open in a new tab — give them noopener/noreferrer
-          // so the target page can't reach back via window.opener.
-          if (safe !== '#') {
-            child.setAttribute('target', '_blank');
-            child.setAttribute('rel', 'noopener noreferrer');
-          }
+        if (name === 'href') href = safeUrl(attr.value);
+      }
+      // Decorate AFTER the removal pass. This loop walks a snapshot of the
+      // source attributes and mutates in place, so setting target/rel while
+      // iterating let an author-supplied `rel="x"` or `target` later in the
+      // snapshot fail the allowlist and remove the attribute just installed:
+      // `<a href=… rel=x>` shipped as target="_blank" with NO rel — reverse
+      // tabnabbing plus a full Referer. target and rel are on no allowlist,
+      // so by here every author-supplied copy is gone and these stick.
+      if (href !== null) {
+        child.setAttribute('href', href);
+        // Anchor links open in a new tab — give them noopener/noreferrer
+        // so the target page can't reach back via window.opener.
+        if (href !== '#') {
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer');
         }
       }
       _scrub(child, depth + 1);
