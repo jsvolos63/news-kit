@@ -149,9 +149,9 @@ from the outside:
 "overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…" } }
 ```
 
-The pin is 0.14.0 as of this release, so **that entry can be deleted once you
-re-pin `@jfs/news-kit` to this commit or later** — and every consumer in the
-family already has. No override is needed even
+The pin has tracked vendor-cli's HEAD since 0.12.0 (the weekly bumper moves
+it), so **that entry can be deleted once you re-pin `@jfs/news-kit` to any
+0.12.0-or-later commit** — and every consumer in the family already has. No override is needed even
 if your own tree carries an older `@jfs/vendor-cli` at top level: npm nests
 the correct copy under `@jfs/news-kit` and the shim resolves the nested one.
 
