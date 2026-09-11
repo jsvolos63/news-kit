@@ -150,8 +150,10 @@ copy lands as bundler output nobody reads line by line.
 Adopting it surfaced eight findings; four were real and are fixed, and two
 RULES are off because they fire on this kit's whole reason for existing:
 
-- **`no-control-regex` is off.** Stripping C0/C1 control characters out of
-  URLs is exactly what the guards here do, so the rule flags the security code
+- **`no-control-regex` is off.** Stripping C0 control characters and DEL out of
+  URLs is exactly what the guards here do — C0 + DEL is the whole of
+  `URL_CONTROL_CHARS` (`[ -]`); the C1 range is NOT stripped,
+  and this line used to say it was — so the rule flags the security code
   rather than a mistake — and one of its two hits is inside the generated
   `@jfs-sanitizer-policy:url-control-chars` region, which may only ever change
   through `jfs-sanitizer-policy-sync`. Turning the rule on would invite

@@ -60,6 +60,17 @@ export function decodeEntities(s) {
 
 function safeFromCodePoint(cp) {
   if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) return '';
+  // Two ranges `String.fromCodePoint` accepts but that must never reach a
+  // caller's string. `&#0;` produced a literal NUL, which browsers drop from a
+  // URL before resolving its scheme — exactly the smuggling the URL guards'
+  // control-char strip exists to stop, arriving one layer earlier through a
+  // decoded feed title. And `&#xD800;` produced a LONE SURROGATE, which is not
+  // a character: it breaks `JSON.stringify` round-trips, `TextEncoder`, and
+  // `structuredClone`, and it cannot be written to a UTF-8 store. A
+  // well-formed document never contains either reference, so dropping them
+  // costs nothing that was real.
+  if (cp === 0) return '';
+  if (cp >= 0xd800 && cp <= 0xdfff) return '';
   try {
     return String.fromCodePoint(cp);
   } catch {
@@ -1174,8 +1185,11 @@ function riverDayDiff(d, now) {
   return Math.round((startOfDay(new Date(now)) - startOfDay(d)) / 86400000);
 }
 
-// Element helper: children are nodes or strings; strings become TEXT nodes,
-// so feed content is never parsed as HTML.
+// Element helper shared by the river renderer and the source menu: children
+// are nodes or strings, and strings become TEXT nodes, so neither feed content
+// nor a source label/count is ever parsed as HTML. (The source menu carried a
+// byte-identical copy under its own name until v0.13.3 — one contract, one
+// implementation, so a fix to one can't miss the other.)
 function riverNode(doc, tag, className, ...children) {
   const node = doc.createElement(tag);
   if (className) node.className = className;
@@ -1774,8 +1788,8 @@ export function createSourceMenu(opts = {}) {
     const st = buttonState();
     btn.replaceChildren(
       d.createTextNode(st.text),
-      srcNode(d, 'span', 'nk-source-count', String(st.count)),
-      srcNode(d, 'span', 'nk-source-caret', '▾'),
+      riverNode(d, 'span', 'nk-source-count', String(st.count)),
+      riverNode(d, 'span', 'nk-source-caret', '▾'),
     );
     btn.classList.toggle('is-filtered', st.active);
   }
@@ -1791,15 +1805,15 @@ export function createSourceMenu(opts = {}) {
     container.classList.add('nk-sources');
     container.replaceChildren();
 
-    if (heading) container.appendChild(srcNode(d, 'h2', 'nk-sources-heading', heading));
+    if (heading) container.appendChild(riverNode(d, 'h2', 'nk-sources-heading', heading));
 
     const allActive = !drill && selected.size === 0;
-    const allRow = srcNode(
+    const allRow = riverNode(
       d,
       'button',
       'nk-source-all',
-      srcNode(d, 'span', 'nk-source-name', (allActive ? '✓ ' : '') + allLabel),
-      srcNode(d, 'span', 'nk-source-count', String(totalCount())),
+      riverNode(d, 'span', 'nk-source-name', (allActive ? '✓ ' : '') + allLabel),
+      riverNode(d, 'span', 'nk-source-count', String(totalCount())),
     );
     allRow.setAttribute('type', 'button');
     allRow.setAttribute('aria-pressed', String(allActive));
@@ -1817,13 +1831,13 @@ export function createSourceMenu(opts = {}) {
       const clickable = n > 0 || drilled;
       const text = labelOf(src);
 
-      const link = srcNode(
+      const link = riverNode(
         d,
         'button',
         'nk-source-link',
-        srcNode(d, 'span', 'nk-source-name', text),
-        srcNode(d, 'span', 'nk-source-count', String(n)),
-        clickable ? srcNode(d, 'span', 'nk-source-go', '›') : null,
+        riverNode(d, 'span', 'nk-source-name', text),
+        riverNode(d, 'span', 'nk-source-count', String(n)),
+        clickable ? riverNode(d, 'span', 'nk-source-go', '›') : null,
       );
       link.setAttribute('type', 'button');
       link.setAttribute('aria-pressed', String(drilled));
@@ -1833,15 +1847,15 @@ export function createSourceMenu(opts = {}) {
       const go = link.querySelector('.nk-source-go');
       if (go) go.setAttribute('aria-hidden', 'true');
 
-      const box = srcNode(d, 'input', 'nk-source-checkbox');
+      const box = riverNode(d, 'input', 'nk-source-checkbox');
       box.setAttribute('type', 'checkbox');
       box.setAttribute('aria-label', `${text} — include in a multi-source selection`);
       box.checked = selected.has(src);
       box.addEventListener('change', () => toggle(src));
-      const check = srcNode(d, 'label', 'nk-source-check', box);
+      const check = riverNode(d, 'label', 'nk-source-check', box);
       check.title = selected.has(src) ? 'Selected — tap to remove' : 'Tap to add to a multi-source selection';
 
-      const row = srcNode(d, 'div', `nk-source-row${drilled ? ' nk-source-row--active' : ''}`, link, check);
+      const row = riverNode(d, 'div', `nk-source-row${drilled ? ' nk-source-row--active' : ''}`, link, check);
       container.appendChild(row);
     }
   }
@@ -1866,18 +1880,6 @@ export function createSourceMenu(opts = {}) {
     buttonState,
   };
   return api;
-}
-
-// Element helper for the source menu (same contract as riverNode: string
-// children become TEXT nodes, so labels/counts are never parsed as HTML).
-function srcNode(doc, tag, className, ...children) {
-  const node = doc.createElement(tag);
-  if (className) node.className = className;
-  for (const c of children) {
-    if (c == null || c === '') continue;
-    node.appendChild(typeof c === 'string' ? doc.createTextNode(c) : c);
-  }
-  return node;
 }
 
 // ===================== dom =====================
@@ -1941,12 +1943,41 @@ function srcNode(doc, tag, className, ...children) {
 // so there is a single implementation with both names (plus escAttr)
 // exported.
 
+// Strip USERINFO from an http(s) authority. `https://nytimes.com@evil.com/x`
+// reads to a human as a link to nytimes.com and resolves to evil.com, and
+// both guards below matched their scheme by PREFIX and returned the rest of
+// the string untouched — so the authority was never looked at. safeContentUrl
+// has stripped credentials since v0.13.0; this is the same treatment for the
+// two absorbed dom-kit guards, and the same choice of strip over reject: the
+// link is still a real link, it just carries no userinfo.
+//
+// Scoped so nothing else about either guard's output moves. A string with no
+// `@`, or one whose `@` is in the path/query (`https://x/a@b`), or one
+// `new URL()` cannot parse, is returned BYTE-IDENTICAL — no re-normalization
+// of the ordinary case, which is what consumers' verbatim-passthrough
+// expectations are pinned on. Only a URL that actually carries credentials
+// comes back rewritten. mailto: never reaches here (its `@` is the mailbox,
+// and it has no authority to carry userinfo in).
+function stripUrlUserinfo(s) {
+  if (!s.includes('@')) return s;
+  let parsed;
+  try {
+    parsed = new URL(s);
+  } catch {
+    return s;
+  }
+  if (!parsed.username && !parsed.password) return s;
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.href;
+}
+
 /**
  * Art-Gallery URL guard. Allows http(s):, mailto:, protocol-relative
  * (`//` → https:), and relative (`/`, `#`, `?`). Everything else — including
  * javascript:, data:, vbscript: — collapses to `"#"` so a link never fires a
  * hostile scheme. Shares the policy-owned URL_CONTROL_CHARS strip with the
- * feed-content guards above.
+ * feed-content guards above, and strips http(s) userinfo like safeContentUrl.
  */
 export function safeUrl(url) {
   if (url == null) return '#';
@@ -1955,13 +1986,12 @@ export function safeUrl(url) {
   // Protocol-relative is treated as https. This check has to run before the
   // single-slash check below, otherwise "//evil.com" would return verbatim
   // and resolve against the current scheme (file://, http://, etc.).
-  if (s.startsWith('//')) return 'https:' + s;
+  if (s.startsWith('//')) return stripUrlUserinfo('https:' + s);
   // Relative paths and fragments are safe.
   if (s.startsWith('/') || s.startsWith('#') || s.startsWith('?')) return s;
   const lower = s.toLowerCase();
-  if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('mailto:')) {
-    return s;
-  }
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return stripUrlUserinfo(s);
+  if (lower.startsWith('mailto:')) return s;
   return '#';
 }
 
@@ -1972,14 +2002,15 @@ export function safeUrl(url) {
  *
  * NOTE: permits `data:image/*` and is intended for `<img>` src ONLY — do not
  * reuse for `<object>`/`<embed>`/`<iframe>` src (their data: URLs can execute).
+ * http(s) userinfo is stripped, as in safeUrl / safeContentUrl.
  */
 export function safeImageUrl(url) {
   if (url == null) return '';
   const s = String(url).replace(URL_CONTROL_CHARS, '').trim();
   if (!s) return '';
-  if (s.startsWith('//')) return 'https:' + s;
+  if (s.startsWith('//')) return stripUrlUserinfo('https:' + s);
   const lower = s.toLowerCase();
-  if (lower.startsWith('http://') || lower.startsWith('https://')) return s;
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return stripUrlUserinfo(s);
   if (lower.startsWith('blob:')) return s;
   if (lower.startsWith('data:image/')) return s;
   return '';
@@ -1988,6 +2019,25 @@ export function safeImageUrl(url) {
 // ---------------------------------------------------------------------------
 // Group B — DOM-dependent helpers
 // ---------------------------------------------------------------------------
+
+// Schemes that EXECUTE when a browser navigates or loads the attribute. `data:`
+// and `blob:` are deliberately absent — el() is the generic builder, and its
+// callers legitimately pass `data:image/...` to an <img src> and blob: URLs to
+// downloads; those are safeImageUrl's / safeContentUrl's call to make, not the
+// builder's. (Named apart from `el` so the identifier can never be confused
+// with the exported builder in a narrowed vendor build.)
+const BUILDER_EXEC_SCHEME_RE = /^(?:javascript|vbscript):/i;
+
+/** True when `el()` must skip attribute `k` rather than set it. */
+function builderAttrRefused(k, v) {
+  const lname = String(k).toLowerCase();
+  if (lname === 'srcdoc') return true;
+  if (!URL_ATTRS.has(lname)) return false;
+  // Match the URL guards' own pre-scheme normalization, so `java\tscript:` —
+  // which a browser resolves as `javascript:` after dropping the tab — cannot
+  // walk past a test that only looked at the raw string.
+  return BUILDER_EXEC_SCHEME_RE.test(String(v).replace(URL_CONTROL_CHARS, '').trim());
+}
 
 // Tiny DOM-builder helper used by renderers to replace
 // `node.innerHTML = '...'` patterns with structural construction.
@@ -2017,6 +2067,26 @@ export function safeImageUrl(url) {
 //                   so `{ title: maybeText }` doesn't emit
 //                   `title=""`.
 //
+// Attribute names that are REFUSED (the attribute is skipped; the rest of the
+// element is built normally):
+//   on*      → inline event handlers, always. Use the `on` key for listeners.
+//   srcdoc   → an <iframe> srcdoc is a whole HTML document parsed inside the
+//              frame, i.e. the same script-smuggling surface as on*, and no
+//              URL guard can see into it. Dropped unconditionally.
+//   a URL-bearing attribute (URL_ATTRS: href, src, formaction, xlink:href, …)
+//              whose value's scheme is `javascript:` or `vbscript:`. The
+//              builder auto-escapes CHILDREN, but consumers hand it
+//              feed-derived URLs — `el('a', { href: item.url })` — and an
+//              attribute value goes through setAttribute verbatim, so a
+//              hostile scheme used to survive the one helper whose whole
+//              point is that it cannot ship an injection.
+//
+// That scheme test is deliberately NOT safeUrl(): safeUrl rewrites
+// protocol-relative URLs, collapses anything it dislikes to "#", and refuses
+// `data:` / `blob:` outright, all of which consumers rely on el() NOT doing
+// (relative hrefs, `#` anchors, `data:image` sources). This refuses the two
+// schemes that execute and passes everything else through byte-identical.
+//
 // Children:
 //   * null / undefined / false → skipped
 //   * string                   → text node (auto-escaped)
@@ -2044,6 +2114,8 @@ export function el(tag, attrs, ...children) {
         // from a (possibly computed) attr name — that would smuggle
         // script through the auto-escaping builder. Use the `on` key
         // for real listeners instead.
+        continue;
+      } else if (builderAttrRefused(k, v)) {
         continue;
       } else {
         node.setAttribute(k, String(v));
