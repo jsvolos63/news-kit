@@ -94,6 +94,35 @@ test('safeImageUrl strips C0 controls + DEL before scheme checks', () => {
     assert.equal(safeImageUrl('data:image\u0000/png;base64,AA'), 'data:image/png;base64,AA');
 });
 
+// --- userinfo stripping (safeUrl / safeImageUrl) ----------------------------
+test('safeUrl strips http(s) userinfo (nytimes.com@evil.com)', () => {
+    // Reads as a link to nytimes.com, resolves to evil.com.
+    assert.equal(safeUrl('https://nytimes.com@evil.com/x'), 'https://evil.com/x');
+    assert.equal(safeUrl('http://user:pw@example.com/a?b=1'), 'http://example.com/a?b=1');
+    assert.equal(safeUrl('//nytimes.com@evil.com/x'), 'https://evil.com/x');
+});
+test('safeImageUrl strips http(s) userinfo', () => {
+    assert.equal(safeImageUrl('https://cdn.example@evil.com/a.png'), 'https://evil.com/a.png');
+    assert.equal(safeImageUrl('//cdn.example@evil.com/a.png'), 'https://evil.com/a.png');
+});
+test('userinfo stripping does not disturb anything else', () => {
+    // No '@' at all, or an '@' outside the authority: byte-identical passthrough,
+    // NOT a re-normalized new URL().href (no added trailing slash, no re-encoding).
+    assert.equal(safeUrl('https://example.com'), 'https://example.com');
+    assert.equal(safeUrl('https://example.com/a@b'), 'https://example.com/a@b');
+    assert.equal(safeUrl('https://example.com/?to=a@b'), 'https://example.com/?to=a@b');
+    assert.equal(safeImageUrl('https://example.com'), 'https://example.com');
+    assert.equal(safeImageUrl('https://example.com/a@b.png'), 'https://example.com/a@b.png');
+    // mailto: has no authority — its '@' is the mailbox and must survive.
+    assert.equal(safeUrl('mailto:a@b.c'), 'mailto:a@b.c');
+    // relative/fragment paths are untouched even when they carry an '@'
+    assert.equal(safeUrl('/a@b'), '/a@b');
+    assert.equal(safeUrl('#a@b'), '#a@b');
+    // blob:/data:image keep safeImageUrl's existing behaviour
+    assert.equal(safeImageUrl('data:image/png;base64,AAA'), 'data:image/png;base64,AAA');
+    assert.equal(safeImageUrl('blob:https://example.com/uuid'), 'blob:https://example.com/uuid');
+});
+
 // --- Group B — DOM-dependent helpers ----------------------------------------
 
 // --- el() auto-escaping + special keys -------------------------------------
@@ -125,6 +154,44 @@ test('el() drops on* event-handler attribute names', () => {
     assert.equal(a.hasAttribute('onclick'), false);
     // normal attributes still work
     assert.equal(a.getAttribute('href'), '#');
+});
+test('el() skips URL attributes carrying javascript:/vbscript:', () => {
+    const a = el('a', { href: 'javascript:alert(1)', title: 'kept' });
+    assert.equal(a.hasAttribute('href'), false);
+    assert.equal(a.getAttribute('title'), 'kept'); // rest of the element still built
+    assert.equal(el('a', { href: 'VBScript:msgbox(1)' }).hasAttribute('href'), false);
+    // every URL-bearing attribute name, not just href/src
+    for (const k of ['src', 'formaction', 'action', 'poster', 'ping', 'xlink:href', 'data', 'cite']) {
+        const n = el('div', { [k]: 'javascript:alert(1)' });
+        assert.equal(n.hasAttribute(k), false, k);
+    }
+    // attribute names are matched case-insensitively, like the HTML parser
+    assert.equal(el('a', { HREF: 'javascript:alert(1)' }).hasAttribute('href'), false);
+});
+test('el() strips control chars before the URL-attribute scheme test', () => {
+    // A browser drops the tab before resolving the scheme, so a raw-string
+    // check would pass this straight through.
+    assert.equal(el('a', { href: 'java\tscript:alert(1)' }).hasAttribute('href'), false);
+    assert.equal(el('a', { href: '\u0000javascript:alert(1)' }).hasAttribute('href'), false);
+    assert.equal(el('a', { href: '  javascript:alert(1)' }).hasAttribute('href'), false);
+});
+test('el() still passes ordinary and non-executing URLs through verbatim', () => {
+    // The refusal is two schemes, NOT safeUrl — relative, fragment, data:image
+    // and protocol-relative all survive byte-identical.
+    assert.equal(el('a', { href: '/rel/path' }).getAttribute('href'), '/rel/path');
+    assert.equal(el('a', { href: '#frag' }).getAttribute('href'), '#frag');
+    assert.equal(el('a', { href: '//evil.example/x' }).getAttribute('href'), '//evil.example/x');
+    assert.equal(el('a', { href: 'https://x.example/a?b=1&c=2' }).getAttribute('href'), 'https://x.example/a?b=1&c=2');
+    assert.equal(el('img', { src: 'data:image/png;base64,AAA' }).getAttribute('src'), 'data:image/png;base64,AAA');
+    // a non-URL attribute is never scheme-tested
+    assert.equal(el('div', { title: 'javascript:alert(1)' }).getAttribute('title'), 'javascript:alert(1)');
+});
+test('el() drops srcdoc unconditionally', () => {
+    const f = el('iframe', { srcdoc: '<p>hi</p>', src: 'https://x.example/', title: 'kept' });
+    assert.equal(f.hasAttribute('srcdoc'), false);
+    assert.equal(f.getAttribute('src'), 'https://x.example/');
+    assert.equal(f.getAttribute('title'), 'kept');
+    assert.equal(el('iframe', { SRCDOC: 'x' }).hasAttribute('srcdoc'), false);
 });
 test('el() flattens array children one level and skips null/false', () => {
     const ul = el('ul', null, [el('li', null, 'a'), null, false, el('li', null, 'b')]);
