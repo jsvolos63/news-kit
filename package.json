@@ -50,7 +50,7 @@
     "kit-pins:bump": "jfs-bump-kit-pins"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#276274b63dea9e88d36e70f7e77bc49e6e97e96b"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#bf9b8596f9f15fea2462e7fa181549bdcc7f10db"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
