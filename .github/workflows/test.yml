@@ -23,6 +23,11 @@ jobs:
       # every consumer's `jfs-news-kit-vendor` runs — pre-flight that it
       # resolves rather than failing opaquely at install time.
       verify-kit-pins: true
+      # MAINTENANCE.md's canonical family block, plus the claim check that its
+      # repo-specific half still names real scripts, workflows, paths and crons.
+      # Both run from a vendor-cli MAIN checkout, so an edit to the canonical
+      # text reddens this repo with no commit in it — re-sync, don't work around.
+      maintenance-check: true
       install-command: npm install
       run: |
         node --check index.js
