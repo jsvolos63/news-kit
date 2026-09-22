@@ -32,8 +32,9 @@ const rules = {
   'no-empty': ['error', { allowEmptyCatch: true }],
   'no-useless-escape': 'off',
   'prefer-const': 'off',
-  // OFF, deliberately. Stripping C0/C1 control characters out of URLs is
-  // precisely what the guards here are FOR, so the rule fires on the
+  // OFF, deliberately. Stripping C0 control characters and DEL out of URLs
+  // (not C1 — URL_CONTROL_CHARS is C0 + DEL only) is precisely what the
+  // guards here are FOR, so the rule fires on the
   // security code rather than on a mistake — and one of the two hits is
   // inside the generated `@jfs-sanitizer-policy:url-control-chars` region,
   // which may only be changed through `jfs-sanitizer-policy-sync`.

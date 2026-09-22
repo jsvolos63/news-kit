@@ -61,7 +61,8 @@ What the merge did:
 
 Since `@jfs/vendor-cli` 0.11.0 a `--pick`/`--global`-narrowed build is
 tree-shaken to the reachable body, so a consumer that only wants the escaper
-ships ~5 KB, not the 113 KB full bundle. 0.12.0 extends that to `--format
+ships under 2 KB, not the ~118 KB full bundle (README's "Vendored build
+sizes" has the measured table). 0.12.0 extends that to `--format
 esm` (0.11.0 rejected `--pick` outside `global`/`cjs` entirely), which is
 what the three ESM consumers need — see below. Two historical constraints on
 editing `index.js` have LAPSED and should not be re-imposed:
