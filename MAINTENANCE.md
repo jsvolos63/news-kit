@@ -50,12 +50,14 @@ local proof of the family block's "Who watches the watchers": the workflow that
 protects this kit's whole consumer chain broke on its debut and sat broken for a
 week.
 
-**`dependabot-merge.yml` has never merged anything here, correctly.** All ten
-of its runs (to 2026-09-22) concluded `skipped`, and the reason is the reusable
-job's own `if:` — it runs only when the triggering `Test` run was a
-`pull_request` run, by `dependabot[bot]`, that **succeeded**. Nine of the ten
-were triggered by pushes and dispatches, so they skip by design. The tenth,
-run #2, was triggered by Dependabot's own `Test` run on #51 — which proves the
+**`dependabot-merge.yml` has never merged anything here, correctly.** All
+twelve of its runs (to 2026-09-22) concluded `skipped`, and the reason is the
+reusable job's own `if:` — it runs only when the triggering `Test` run was a
+`pull_request` run, by `dependabot[bot]`, that **succeeded**. It fires on
+`Test` runs of any kind, and eleven of the twelve followed runs that were not
+Dependabot's — pushes to `main`, dispatches, and sessions' own `pull_request`
+runs — so they skip by design. The other, run #2, was triggered by
+Dependabot's own `Test` run on #51 — which proves the
 `workflows: [Test]` name match fires — and skipped because that run was red
 (the stale CLAUDE.md block, not jsdom). Had it been green, the job would have
 run and left #51 open anyway, because a major is not merged. So the *merge*

@@ -85,12 +85,14 @@ A narrowed build is esbuild's reprint of the reachable body, so its comments
 are dropped (only the provenance header and `index.js`'s file-top preamble are
 re-attached); a full surface is never shaken and is the verbatim source. Every row
 naming a consumer is byte-for-byte the size of that consumer's committed copy
-(measured 2026-09-22). `--format global`:
+(measured 2026-09-22). `--format global` — the three rows that name no
+consumer use `--name NewsKit`; a global build spells its name twice, so each
+character of it is two bytes:
 
 | Pick | Bytes |
 |---|---|
-| `escapeHtml` | 1,717 |
-| `createModal` | 12,208 |
+| `escapeHtml` | 1,729 |
+| `createModal` | 12,220 |
 | JFS-Sports' four globals (`NewsKitSanitize`, `NewsKitDedupe`, `NewsKitRiver`, `NewsKitSourceMenu`) | 32,554 |
 | Surf-Tracker's three globals (`NewsKitSanitize`, `NewsKitRiver`, `ModalKit`) | 33,013 |
 | BearsMockDraft's four globals (`NewsKitSanitize`, `NewsKitRiver`, `NewsKitSourceMenu`, `ModalKit`) | 43,796 |
