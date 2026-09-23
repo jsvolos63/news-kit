@@ -31,10 +31,18 @@ jobs:
       install-command: npm install
       vendor-sync-command: ''
       version-bump-command: ''
-      # The same checks test.yml runs. test/vendor.test.js drives the pinned
-      # CLI's generator, so a vendor-cli bump that would change what consumers
-      # vendor fails HERE rather than in three consumers' `vendor:sync`.
+      # EXACTLY the checks test.yml runs — test/repo.test.js fails when
+      # the two blocks differ. The bump's merge is a GITHUB_TOKEN push, which
+      # fires no workflows, so this is the only validation a bump gets before
+      # it lands on main. It used to omit `npm run lint` on the theory that a
+      # vendor-cli pin bump cannot change index.js; but the install above
+      # resolves eslint's floating range fresh (no lockfile here), so a new
+      # eslint minor could redden lint and the bump would still merge green.
+      # test/vendor.test.js drives the pinned CLI's generator, so a vendor-cli
+      # bump that would change what consumers vendor fails HERE rather than in
+      # the consumers' `vendor:sync`.
       check-command: |
         node --check index.js
+        npm run lint
         npm run policy:check
         npm test

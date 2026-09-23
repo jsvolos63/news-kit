@@ -28,7 +28,17 @@ jobs:
       # Both run from a vendor-cli MAIN checkout, so an edit to the canonical
       # text reddens this repo with no commit in it — re-sync, don't work around.
       maintenance-check: true
+      # No lockfile here (package-lock.json is gitignored), so `npm install`
+      # rather than `npm ci`; the audit below reads the lockfile that install
+      # writes into the workspace.
       install-command: npm install
+      # `npm audit --omit=dev --audit-level=high` over the SHIPPED tree. This
+      # kit has one real `dependencies` entry — @jfs/vendor-cli, which pulls
+      # esbuild in behind it — and every consumer that installs this package
+      # installs that tree, so a high/critical advisory in it is theirs too.
+      prod-audit: true
+      # Keep this block and kit-pin-bump.yml's check-command identical:
+      # test/repo.test.js fails when they differ.
       run: |
         node --check index.js
         npm run lint

@@ -1,12 +1,12 @@
 # @jfs/news-kit
 
 Shared, dependency-free news **and DOM** primitives extracted from the JFS
-family of buildless static apps (Surf-Tracker, BearsMockDraft,
-market-monitor, JFS-Sports, John's News, Bears Front Office). Pure ESM, zero
-runtime dependencies, single-file bundle (`index.js`).
+family of static apps, and vendored today by six of them (Surf-Tracker,
+BearsMockDraft, market-monitor, JFS-Sports, John's News, Art-Gallery-). Pure
+ESM, zero runtime dependencies, single-file bundle (`index.js`).
 
-> **v0.12.0 absorbed `@jfs/dom-kit` and `@jfs/modal-kit`.** Both kits are
-> being retired into this one, per the family's extraction bar (*prefer
+> **v0.12.0 absorbed `@jfs/dom-kit` and `@jfs/modal-kit`.** Both kits were
+> retired into this one, per the family's extraction bar (*prefer
 > growing an existing kit over minting a new one*): dom-kit's 13 exports
 > overlapped this kit's escaper and URL guards, and modal-kit was 554 lines
 > behind effectively one public export. **Every name they exported is
@@ -16,7 +16,7 @@ runtime dependencies, single-file bundle (`index.js`).
 > moved, and neither pin exists anywhere in the family.
 > Because the vendoring CLI tree-shakes a narrowed build (`@jfs/vendor-cli`
 > 0.11.0+ for `global`/`cjs`, 0.12.0+ for `esm`), taking only `escapeHtml`
-> from this kit costs ~5 KB, not the whole bundle — see
+> from this kit costs under 2 KB, not the whole ~118 KB — see
 > [Vendored build sizes](#vendored-build-sizes).
 
 ## What's in it
@@ -57,15 +57,14 @@ Worked examples of the divergence:
 | `mailto:a@b.c` | `mailto:a@b.c` | `""` | `null` | `false` |
 | `data:image/png;base64,…` | `"#"` | kept | `null` | `false` |
 
+`test/escape-dedup.test.js` pins every cell. Do not unify them.
+
 Two more guards — `sanitizeUrl` (HTML-escaped normalized href, for innerHTML
 interpolation) and `sanitizeHref` (the same, verbatim, for
 `setAttribute`/`.href`/`.src`) — were retired to their single consumer in
 v0.13.0: only JFS-Sports ever imported them and nothing in the kit called
 them, so they live as app-owned copies in its `helpers.js`. Don't re-add
 them without a second consumer.
-| `http://x/?a=1&b=2` | verbatim | verbatim | `…&amp;b=2` | `…&b=2` | `…&b=2` | `true` |
-
-`test/escape-dedup.test.js` pins every row. Do not unify them.
 
 All three http(s) guards strip USERINFO: `https://nytimes.com@evil.com/x`
 comes back as `https://evil.com/x`, because a link that reads as one host and
@@ -81,36 +80,44 @@ lowercase set is derived from it, so the two can no longer drift.
 
 ### Vendored build sizes
 
-Generated from v0.12.0 with `@jfs/vendor-cli` 0.12.0 (unminified, comments
-included). `--format global`:
+Generated from v0.13.3 with the pinned `@jfs/vendor-cli` (0.21.6), unminified.
+A narrowed build is esbuild's reprint of the reachable body, so its comments
+are dropped (only the provenance header and `index.js`'s file-top preamble are
+re-attached); a full surface is never shaken and is the verbatim source. Every row
+naming a consumer is byte-for-byte the size of that consumer's committed copy
+(measured 2026-09-22). `--format global` — the three rows that name no
+consumer use `--name NewsKit`; a global build spells its name twice, so each
+character of it is two bytes:
 
 | Pick | Bytes |
 |---|---|
-| `escapeHtml` | 5,496 |
-| `byId`, `elem` (Weather / FlightCheck) | 6,173 |
-| `createModal` | 27,645 |
-| `NewsKitSanitize` + `NewsKitRiver` (Surf-Tracker's two globals) | 38,962 |
-| sanitize + river + source-menu + `createModal` + `escapeHtml` | 79,709 |
-| full 50-export surface (unshaken) | 114,372 |
+| `escapeHtml` | 1,729 |
+| `createModal` | 12,220 |
+| JFS-Sports' four globals (`NewsKitSanitize`, `NewsKitDedupe`, `NewsKitRiver`, `NewsKitSourceMenu`) | 32,554 |
+| Surf-Tracker's three globals (`NewsKitSanitize`, `NewsKitRiver`, `ModalKit`) | 33,013 |
+| BearsMockDraft's four globals (`NewsKitSanitize`, `NewsKitRiver`, `NewsKitSourceMenu`, `ModalKit`) | 43,796 |
+| full 48-export surface (unshaken) | 119,759 |
 
-`--format esm` — narrowed since vendor-cli 0.12.0, so the ESM consumers stop
-shipping the full body:
+`--format esm`:
 
 | Pick | Bytes |
 |---|---|
-| `escapeHtml` | 5,520 |
-| `escapeHtml`, `safeUrl`, `safeImageUrl`, `sanitizeHtml` (Art-Gallery-) | 16,329 |
-| market-monitor's 9 exports | 70,095 |
-| John's News' 10 exports | 90,018 |
-| full 50-export surface (unshaken) | 113,067 |
+| `escapeHtml` | 1,741 |
+| `escapeHtml`, `safeUrl`, `safeImageUrl`, `sanitizeHtml` (Art-Gallery-) | 5,216 |
+| market-monitor's 9 exports | 41,988 |
+| John's News' 9 exports | 49,998 |
+| full 48-export surface (unshaken; JFS-Sports) | 118,486 |
 
-Every narrowed build keeps the sanitizer-policy marked regions, so
-`jfs-sanitizer-policy-sync --check` still gates the vendored copy.
+A narrowed build carries no sanitizer-policy marker regions: since vendor-cli
+0.20.0 it reprints policy code like any other code and strips the marker
+lines. The policy values are gated at the SOURCE instead — this repo's
+`npm run policy:check` in CI, and the generator itself, which validates this
+kit's marked regions against the canonical family policy before it writes or
+checks any consumer's copy.
 
-Moving the pin from vendor-cli 0.11.0 to 0.12.0 emits **byte-identical**
-output for every `global`/`cjs` invocation and for a full-surface `esm`
-copy, so existing consumers see no `vendor:check` drift from the bump alone
-— it only adds narrowing to `--format esm`.
+A vendor-cli pin bump can change a narrowed build's bytes (0.13.0 and 0.16.0
+both did), which a consumer picks up as `vendor:check` drift and a site version
+bump; a full-surface copy is verbatim source and does not move on a CLI bump.
 
 ## Using it
 
@@ -118,8 +125,8 @@ Consumers pin the package by **commit SHA** and vendor it with the kit's own
 CLI (`jfs-news-kit-vendor`), with the same invocation plus `--check` in CI
 failing the build on drift. An ESM consumer copies the module verbatim
 (`--format esm --out js/vendor/news-kit/index.js`); a classic-script consumer
-takes an IIFE global, optionally narrowed to just what it uses, e.g.
-BearsMockDraft's reader sanitizer
+takes an IIFE global, optionally narrowed to just what it uses, e.g. a
+reader-only sanitizer
 (`--format global --name NewsKitSanitize --pick
 sanitizeHtmlToFragment,isSafeContentUrl
 --out js/vendor/news-kit/sanitize-html.js`).
@@ -202,6 +209,21 @@ npm install   # jsdom is a devDependency for the DOM-path tests only
 npm test      # node --test
 ```
 
+CI (`.github/workflows/test.yml`) runs four commands, in this order, and so
+does the weekly kit-pin bump before it merges anything:
+
+```
+node --check index.js
+npm run lint
+npm run policy:check
+npm test
+```
+
+jsdom 30 needs Node `^22.22.2 || ^24.15.0 || >=26.0.0` to run the DOM tests.
+That is a floor for working ON this kit, not for using it: `index.js` imports
+nothing, and `engines.node` stays `>=18` because it describes the shipped
+module.
+
 `index.js` itself imports nothing; jsdom is installed on `globalThis` inside
 the DOM-dependent test files (`test/*-dom.test.js`, `test/dom.test.js`) or
 constructed per-test (`test/modal.test.js`) before the kit is imported, so the
@@ -212,7 +234,10 @@ globals — it is what proves `"sideEffects": false`.
 
 ## Versioning
 
-Bump `version` in `package.json` for every change to `index.js`, and tag the
-commit (`vX.Y.Z`). The `index.js` banner deliberately carries no version —
-vendored copies get `v${pkg.version}` stamped by the shared vendor CLI. Consumers pin
-SHAs, so nothing moves until they re-pin and run `npm run vendor:sync`.
+Bump `version` in `package.json` for every change to `index.js` or `bin/` —
+family CI's version guard fails a pull request that changes either without
+one. Don't tag by hand: `.github/workflows/release.yml` tags `vX.Y.Z` and
+opens the GitHub release once `Test` is green on `main`. The `index.js` banner
+deliberately carries no version — vendored copies get `v${pkg.version}`
+stamped by the shared vendor CLI. Consumers pin SHAs, so nothing moves until
+they re-pin and run `npm run vendor:sync`.
