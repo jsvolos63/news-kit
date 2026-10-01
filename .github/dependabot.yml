@@ -4,6 +4,16 @@
 # open for a review. The @jfs/* git pins are the weekly kit-pin bump's, not
 # Dependabot's. GitHub Actions monthly, so SHA-pinned third-party actions
 # pick up fixes.
+#
+# cooldown (the family audit's FAM-4): a version update is proposed only once
+# the release is 7 days old. Every npm entry Dependabot manages here is a
+# devDependency (eslint, @eslint/js, globals, jsdom), but the merge workflow
+# lands a green minor or patch with no review, and this kit's output is
+# committed into six apps. So a hijacked release gets a week to be caught and
+# yanked before it can reach the toolchain that gates that output. Version
+# updates only: GitHub applies no cooldown to security updates, which still
+# open at once. `default-days` is the one cooldown key both ecosystems below
+# support (the semver-*-days keys are npm-only). The schedule is unchanged.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -11,6 +21,8 @@ updates:
     schedule:
       interval: weekly
       day: tuesday
+    cooldown:
+      default-days: 7
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -19,3 +31,5 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
