@@ -13,9 +13,15 @@ name: Kit pin bump
 # vendors nothing) and no version bump (a kit's semver tracks ITS shipped
 # surface — index.js and bin — which a vendor-cli pin bump does not touch;
 # family CI's version guard watches exactly those paths and would object).
+#
+# The schedule runs 30 minutes AHEAD of the consumers' Monday 06:41 UTC bumps
+# on purpose. On the same minute, a consumer's bump could resolve this repo's
+# HEAD before this repo's own bump merged: on 2026-09-28 Art-Gallery-'s did,
+# seconds before #59 landed, and sat one commit behind for a week. Earlier, a
+# self-bump lands first and the consumers pick it up the same morning.
 on:
   schedule:
-    - cron: '41 6 * * 1'   # Mondays ~06:41 UTC, with the rest of the family
+    - cron: '11 6 * * 1'   # Mondays ~06:11 UTC, before the consumers' ~06:41
   workflow_dispatch:
 
 permissions:
