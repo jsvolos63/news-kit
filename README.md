@@ -16,7 +16,7 @@ ESM, zero runtime dependencies, single-file bundle (`index.js`).
 > moved, and neither pin exists anywhere in the family.
 > Because the vendoring CLI tree-shakes a narrowed build (`@jfs/vendor-cli`
 > 0.11.0+ for `global`/`cjs`, 0.12.0+ for `esm`), taking only `escapeHtml`
-> from this kit costs under 2 KB, not the whole ~118 KB — see
+> from this kit costs under 2 KB, not the whole ~121 KB — see
 > [Vendored build sizes](#vendored-build-sizes).
 
 ## What's in it
@@ -26,7 +26,7 @@ ESM, zero runtime dependencies, single-file bundle (`index.js`).
 | decode-entities | `decodeEntities` | Numeric + common named entities; `&amp;` is decoded **last** so already-decoded ampersands are never re-interpreted. |
 | escape | `escapeHtml`, `escHtml`, `escAttr`, `safeContentUrl` | ONE all-5-char HTML escaper under three names (dom-kit's `escapeHtml` and news-kit's `escHtml` were verified identical over 85,683 differential inputs and collapsed; `escAttr` is the third historical alias). Plus the strict URL guard: `safeContentUrl` returns a normalized http(s) href for DOM APIs (`node.href = …`) or `null` on reject. |
 | classify | `classify`, `makeClassifier`, `signalPriority`, `DEFAULT_SIGNALS`, `DEFAULT_PRIORITY` | Config-driven keyword classifier; each app supplies its own vocabulary. |
-| parse | `parseFeed`, `looksLikeFeed` | RSS/Atom → normalized items. Uses `DOMParser` when available (browser), a linear-scan regex fallback otherwise (Node/serverless). Both paths return entity-decoded text exactly once. Input capped at 4 MB / 1000 items. |
+| parse | `parseFeed`, `looksLikeFeed` | RSS/Atom → normalized items. Uses `DOMParser` when available (browser), a linear-scan regex fallback otherwise (Node/serverless) — every tag, CDATA and tag-strip scan is an `indexOf` walk, so a hostile feed cannot go quadratic (v0.13.4; `test/parse.test.js` holds six hostile shapes under a time bound). Both paths return entity-decoded text exactly once. Input capped at 4 MB / 1000 items. |
 | dedupe | `dedupeItems`, `mergeItems`, `normalizeTitle`, `stripPublisher`, `titleSignature`, `nearDuplicate`, `earliestDate` | Signature-based near-duplicate clustering (single-linkage, input capped at 2000 items) + merge-with-retention so a transient empty fetch can't blank the previous set. |
 | time | `relativeTime` | "just now" / "3m ago" / "2h ago" / "Jun 16"; `now` injectable for tests. |
 | render-river | `renderNewsRiver`, `renderNewsRiverSkeletons`, `newsRiverCard`, `riverDayLabel`, `riverCoarseGroupLabel`, `ensureNewsRiverStyles`, `dedupedNewsSummary`, `isStandaloneDisplay`, `NEWS_RIVER_CSS` | The John's News river presentation: day-grouped article cards (source label + relative time + optional favicon/chip, FULL TEXT / DEEP LINK badge, serif headline, clamped summary, byline, lazy thumbnail, per-source accents). DOM-node rendering (feed text never parsed as HTML; URLs pass `safeContentUrl`). Styles install once via constructed stylesheet (CSP-safe) with a `<style>` fallback; themable through `--nk-*` variables declared at zero specificity. **Deep-link rule:** headlines with URLs stay plain anchors — `onOpen(item, e)` sees only unmodified left-clicks and returning `false` lets the tap navigate so iOS universal links open the publisher's own app (NYT, Economist, …). External links carry `target="_blank"` in a browser tab, but when the page runs as an installed app (standalone display, detected via `isStandaloneDisplay`, overridable with `opts.standalone`) they navigate the current context instead — `_blank` there spawns a launch window that outlives the universal-link handoff, stranding the reader on an orphaned window when they close the publisher's app. Deks are deduped by default: a summary that merely repeats the headline is dropped, and a body that opens by repeating it keeps only the trailing prose (`dedupedNewsSummary` is exported so apps with their own renderers share the policy; `opts.dedupeSummary === false` opts out). Cold loads paint `renderNewsRiverSkeletons` — fixed-height placeholder cards that reserve the river's space so the swap to content can't shift the page (skeletons are only for an empty river; cached/last-good items should stay visible through a refresh). Long-window feeds can swap the day labeler via `opts.groupLabel` (`riverCoarseGroupLabel`: Today / Yesterday / Earlier this week / Earlier this month / Older). Browser-only. |
@@ -80,14 +80,17 @@ lowercase set is derived from it, so the two can no longer drift.
 
 ### Vendored build sizes
 
-Generated from v0.13.3 with the pinned `@jfs/vendor-cli` (0.21.6), unminified.
+Generated from v0.13.4 with the pinned `@jfs/vendor-cli` (0.21.10), unminified.
 A narrowed build is esbuild's reprint of the reachable body, so its comments
 are dropped (only the provenance header and `index.js`'s file-top preamble are
 re-attached); a full surface is never shaken and is the verbatim source. Every row
-naming a consumer is byte-for-byte the size of that consumer's committed copy
-(measured 2026-09-22). `--format global` — the three rows that name no
-consumer use `--name NewsKit`; a global build spells its name twice, so each
-character of it is two bytes:
+naming a consumer was byte-for-byte the size of that consumer's committed copy
+at v0.13.3 (measured 2026-09-22, re-checked 2026-10-01). v0.13.4's linear feed
+scans changed only the rows that reach `parseFeed` — market-monitor
+(41,988 → 43,314), John's News (49,998 → 51,324) and both full surfaces — and
+a consumer's copy matches again once it re-pins and re-vendors. `--format
+global` — the three rows that name no consumer use `--name NewsKit`; a global
+build spells its name twice, so each character of it is two bytes:
 
 | Pick | Bytes |
 |---|---|
@@ -96,7 +99,7 @@ character of it is two bytes:
 | JFS-Sports' four globals (`NewsKitSanitize`, `NewsKitDedupe`, `NewsKitRiver`, `NewsKitSourceMenu`) | 32,554 |
 | Surf-Tracker's three globals (`NewsKitSanitize`, `NewsKitRiver`, `ModalKit`) | 33,013 |
 | BearsMockDraft's four globals (`NewsKitSanitize`, `NewsKitRiver`, `NewsKitSourceMenu`, `ModalKit`) | 43,796 |
-| full 48-export surface (unshaken) | 119,759 |
+| full 48-export surface (unshaken) | 122,882 |
 
 `--format esm`:
 
@@ -104,9 +107,9 @@ character of it is two bytes:
 |---|---|
 | `escapeHtml` | 1,741 |
 | `escapeHtml`, `safeUrl`, `safeImageUrl`, `sanitizeHtml` (Art-Gallery-) | 5,216 |
-| market-monitor's 9 exports | 41,988 |
-| John's News' 9 exports | 49,998 |
-| full 48-export surface (unshaken; JFS-Sports) | 118,486 |
+| market-monitor's 9 exports | 43,314 |
+| John's News' 9 exports | 51,324 |
+| full 48-export surface (unshaken; JFS-Sports) | 121,609 |
 
 A narrowed build carries no sanitizer-policy marker regions: since vendor-cli
 0.20.0 it reprints policy code like any other code and strips the marker

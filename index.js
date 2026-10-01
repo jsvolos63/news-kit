@@ -233,9 +233,11 @@ export function signalPriority(signal, table = DEFAULT_PRIORITY) {
 const MAX_TITLE = 300;
 const MAX_SUMMARY = 240;
 const MAX_CONTENT = 200_000;
-// Hard bound on the raw feed body before any parsing — a hostile feed (e.g. many
-// unclosed <item> tags) could otherwise drive the regex scan quadratic. 4 MB is
-// far above any real feed.
+// Hard bound on the raw feed body before any parsing. The regex path's scans
+// are linear since v0.13.4 (NWK-1, below), so this caps the total work: under
+// half a second for the worst hostile 4 MB body measured on Node 22; the
+// family audit put the old quadratic scans at about an hour. 4 MB is far above
+// any real feed.
 const MAX_FEED_BYTES = 4_000_000;
 // Cap items the regex path will extract, independent of the caller's `max`.
 const HARD_ITEM_CAP = 1000;
@@ -352,69 +354,112 @@ function parseWithDom(xml) {
 }
 
 // ---- Regex path -----------------------------------------------------------
+//
+// Every tag, CDATA and close-tag scan here, and stripTags below, is an indexOf
+// walk (NWK-1, the family audit's FAM-9). The regexes they replace —
+// `[^>]*>`, `([^>]*?)\/?>`, `[\s\S]*?\]\]>` and the like — rescanned to the
+// end of the input from every candidate with no terminator after it, so N
+// unclosed opens cost O(N^2). Measured on v0.13.3 (Node 22): 400 KB of
+// unclosed `<link ` took 14 s, 200 KB of bare `<` in a summary 13 s. Each
+// walk stops at the first candidate with no terminator, because no later one
+// has one either. The regexes left are linear: fixed-width names, entities
+// ending at `;`, and href/rel values ending at the next quote.
 
 function parseWithRegex(xml) {
   const out = [];
-  // Find each opening <item>/<entry>, then locate its close with indexOf from
-  // that point. A previous lazy regex (/<(item|entry)\b[\s\S]*?<\/\1>/g) rescanned
-  // to EOF from every unmatched open tag → O(n^2) on a feed with unclosed items.
-  // This is a single linear pass.
-  const openRe = /<(item|entry)\b[^>]*>/gi;
+  // Each opening <item>/<entry> by its name, then its `>` and its close by
+  // indexOf: a single linear pass.
+  const openRe = /<(item|entry)\b/gi;
   let m;
   while ((m = openRe.exec(xml)) && out.length < HARD_ITEM_CAP) {
+    const gt = xml.indexOf('>', openRe.lastIndex);
+    if (gt === -1) break; // no `>` left → no later open tag completes either
     const tag = m[1].toLowerCase();
-    const closeIdx = xml.indexOf(`</${tag}`, openRe.lastIndex);
+    const closeIdx = xml.indexOf(`</${tag}`, gt + 1);
     if (closeIdx === -1) break; // no closing tag → stop rather than rescan
     const block = xml.slice(m.index, closeIdx);
+    const lower = foldCase(block);
     out.push({
-      title: decodedText(block, ['title']),
-      url: regexLink(block),
-      date: decodedText(block, ['pubDate', 'published', 'updated', 'dc:date', 'date']),
-      summary: decodedText(block, ['description', 'summary', 'content']),
+      title: decodedText(block, lower, ['title']),
+      url: regexLink(block, lower),
+      date: decodedText(block, lower, ['pubDate', 'published', 'updated', 'dc:date', 'date']),
+      summary: decodedText(block, lower, ['description', 'summary', 'content']),
       // Article body is HTML — unwrap CDATA but do NOT entity-decode it.
-      content: decodeCdata(rawTag(block, ['content:encoded'])),
+      content: decodeCdata(rawTag(block, lower, ['content:encoded'])),
     });
     openRe.lastIndex = closeIdx; // continue scanning after this block
   }
   return out;
 }
 
+// The tag searches run on a lowercased copy that must index exactly like the
+// block. toLowerCase does, for every code point but two (test/parse.test.js
+// enumerates them on the running engine): U+0130 (İ) becomes TWO code units,
+// which until v0.13.4 shifted every later field ("İstanbul<", a link ending in
+// "<"), and U+212A KELVIN SIGN becomes an ASCII `k`. Both are swapped for
+// U+0131 first: one unit, its own lowercase, not a word character.
+const CASE_FOLD_HAZARDS = /[\u0130\u212A]/g;
+function foldCase(s) {
+  return s.replace(CASE_FOLD_HAZARDS, '\u0131').toLowerCase();
+}
+
+// Index of the first `<name` at or after `from` that the regex `<name\b`
+// would match: the next character is not an ASCII word character, or there is
+// none. `lower` is foldCase(block) and `name` is lowercase.
+function openTagAt(lower, name, from) {
+  const needle = `<${name}`;
+  let i = lower.indexOf(needle, from);
+  while (i !== -1 && isWordCharCode(lower.charCodeAt(i + needle.length))) {
+    i = lower.indexOf(needle, i + 1);
+  }
+  return i;
+}
+
+function isWordCharCode(c) {
+  // NaN (past the end) is not a word character, matching `\b` at end of input.
+  return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 95;
+}
+
 // Plain-text fields (title/date/summary): unwrap CDATA, then decode entities so
 // the regex path matches what a DOM parser's textContent already returns.
-function decodedText(block, tags) {
-  return decodeEntities(decodeCdata(rawTag(block, tags))).trim();
+function decodedText(block, lower, tags) {
+  return decodeEntities(decodeCdata(rawTag(block, lower, tags))).trim();
 }
 
-// Open tag by regex, close tag by indexOf — the same shape the outer <item>
-// scan uses, and for the same reason: a lazy `[\s\S]*?<\/tag>` restarts a
-// scan-to-end at every unmatched open, so N `<title>`s with no close were
-// quadratic, and this runs up to nine times per item. Measured: a 4 MB
-// feed inside MAX_FEED_BYTES did not finish in 100 s; it parses in
-// milliseconds now.
-function tagBody(block, tag) {
-  const open = new RegExp(`<${escapeRe(tag)}\\b[^>]*>`, 'i').exec(block);
-  if (!open) return null;
-  const start = open.index + open[0].length;
-  const close = block.toLowerCase().indexOf(`</${tag.toLowerCase()}`, start);
+// The outer <item> scan's shape. The lazy `[\s\S]*?<\/tag>` it replaced left a
+// 4 MB feed unfinished after 100 s (fixed in v0.13.2); the open tag's
+// `<tag\b[^>]*>` was the same bug (NWK-1, v0.13.4). Up to eleven calls an item.
+function tagBody(block, lower, tag) {
+  const name = tag.toLowerCase();
+  const at = openTagAt(lower, name, 0);
+  if (at === -1) return null;
+  const gt = block.indexOf('>', at + 1 + name.length);
+  if (gt === -1) return null;
+  const close = lower.indexOf(`</${name}`, gt + 1);
   if (close === -1) return null;
-  return block.slice(start, close);
+  return block.slice(gt + 1, close);
 }
 
-function rawTag(block, tags) {
+function rawTag(block, lower, tags) {
   for (const tag of tags) {
-    const body = tagBody(block, tag);
+    const body = tagBody(block, lower, tag);
     if (body != null) return body;
   }
   return '';
 }
 
-function regexLink(block) {
+function regexLink(block, lower) {
   // Atom: <link href="..."/>  (prefer rel="alternate" or no rel)
-  const atomRe = /<link\b([^>]*?)\/?>/gi;
   let candidate = '';
-  let mm;
-  while ((mm = atomRe.exec(block))) {
-    const attrs = mm[1] || '';
+  let at = openTagAt(lower, 'link', 0);
+  while (at !== -1) {
+    const gt = block.indexOf('>', at + 5);
+    if (gt === -1) break; // no `>` left → no later <link> completes either
+    // What `<link\b([^>]*?)\/?>` captured: everything up to the first `>`,
+    // less a self-closing slash.
+    let attrs = block.slice(at + 5, gt);
+    if (attrs.endsWith('/')) attrs = attrs.slice(0, -1);
+    at = openTagAt(lower, 'link', gt + 1);
     const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(attrs);
     if (!href) continue;
     const rel = /\brel\s*=\s*["']([^"']+)["']/i.exec(attrs);
@@ -423,16 +468,30 @@ function regexLink(block) {
   }
   if (candidate) return candidate;
   // RSS: <link>...</link>
-  const rss = tagBody(block, 'link');
+  const rss = tagBody(block, lower, 'link');
   if (rss) return decodeEntities(decodeCdata(rss)).trim();
   return '';
 }
 
+const CDATA_OPEN = '<![CDATA[';
+const CDATA_CLOSE = ']]>';
+
+// Unwrap each complete CDATA section. An unclosed one stays verbatim, with
+// everything after it, as under the old lazy regex.
 function decodeCdata(s) {
   if (!s) return '';
-  const cdata = /<!\[CDATA\[([\s\S]*?)\]\]>/g;
-  if (cdata.test(s)) return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  return s;
+  let open = s.indexOf(CDATA_OPEN);
+  if (open === -1) return s;
+  let out = '';
+  let from = 0;
+  while (open !== -1) {
+    const close = s.indexOf(CDATA_CLOSE, open + CDATA_OPEN.length);
+    if (close === -1) break;
+    out += s.slice(from, open) + s.slice(open + CDATA_OPEN.length, close);
+    from = close + CDATA_CLOSE.length;
+    open = s.indexOf(CDATA_OPEN, from);
+  }
+  return out + s.slice(from);
 }
 
 // ---- shared helpers -------------------------------------------------------
@@ -443,8 +502,21 @@ function parseDate(s) {
   return Number.isNaN(t) ? null : t;
 }
 
+// Each `<…>` span (a `<` to the first `>` after it) becomes one space, as
+// /<[^>]*>/g did. Runs on BOTH paths, the browser's DOM path included.
 function stripTags(s) {
-  return String(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  s = String(s);
+  let out = '';
+  let from = 0;
+  let lt = s.indexOf('<');
+  while (lt !== -1) {
+    const gt = s.indexOf('>', lt + 1);
+    if (gt === -1) break; // no `>` after this `<` → none after a later one
+    out += s.slice(from, lt) + ' ';
+    from = gt + 1;
+    lt = s.indexOf('<', from);
+  }
+  return (out + s.slice(from)).replace(/\s+/g, ' ');
 }
 
 function cap(s, n) {
@@ -458,10 +530,6 @@ function cap(s, n) {
   const c = s.charCodeAt(end - 1);
   if (c >= 0xd800 && c <= 0xdbff) end -= 1;
   return s.slice(0, end);
-}
-
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ===================== dedupe =====================
