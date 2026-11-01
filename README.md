@@ -164,7 +164,7 @@ from the outside:
 "overrides": { "@jfs/news-kit": { "@jfs/vendor-cli": "github:…" } }
 ```
 
-The pin has tracked vendor-cli's HEAD since 0.12.0 (the weekly bumper moves
+The pin has tracked vendor-cli's HEAD since 0.12.0 (the monthly bumper moves
 it), so **that entry can be deleted once you re-pin `@jfs/news-kit` to any
 0.12.0-or-later commit** — and every consumer in the family already has. No override is needed even
 if your own tree carries an older `@jfs/vendor-cli` at top level: npm nests
@@ -213,7 +213,7 @@ npm test      # node --test
 ```
 
 CI (`.github/workflows/test.yml`) runs four commands, in this order, and so
-does the weekly kit-pin bump before it merges anything:
+does the monthly kit-pin bump before it merges anything:
 
 ```
 node --check index.js

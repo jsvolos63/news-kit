@@ -1,7 +1,8 @@
 # Maintaining @jfs/news-kit
 
 This kit's own housekeeping is in good order and can be shown to be: the one
-`@jfs` pin moves every Monday (the last seven scheduled bumps succeeded, to
+`@jfs` pin moves on the monthly bump (weekly on Mondays until the owner's
+2026-11-01 decision; the last seven weekly scheduled bumps succeeded, to
 2026-09-28), `package.json` is at 0.13.4 (`release.yml` tags it once `Test`
 is green on `main`), and `npm test` is 214 green. None of that is delivery.
 Forty-eight exports reach six other repositories as **committed bundler
@@ -20,8 +21,8 @@ gate, and that its CI can go red with no commit in it.
 | Automation | Fires | Lands by itself | Leaves for a session | How a failure would be noticed |
 | --- | --- | --- | --- | --- |
 | `.github/workflows/test.yml` → `family-ci.yml@main` (`verify-kit-pins: true`, `maintenance-check: true`, `install-command: npm install`, `prod-audit: true`, `version-guard-paths: index.js bin`) | push to `main`, every `pull_request`, `workflow_dispatch` | — it *is* the gate | nothing | red on the PR or the commit — the one automation here that fails where somebody is already looking |
-| `.github/dependabot.yml` + `.github/workflows/dependabot-merge.yml` (`workflow_run` on `Test` completed) | npm weekly Tuesday, minor+patch grouped; `github-actions` monthly; both with a 7-day `cooldown` (version updates only, FAM-4) | every minor/patch bump, squash-merged on green | **every major**, and any PR body it cannot parse | a PR sits open. Nobody is told. #51 (jsdom 30.0.1) sat 13 days; the 2026-09-22 sweep superseded it. |
-| `.github/workflows/kit-pin-bump.yml` (`cron: '11 6 * * 1'`, Mondays ~06:11 UTC — half an hour ahead of the consumers' bumps since 2026-10-01, see "The same-cron race") + dispatch, → `kit-pin-bump.yml@main` with `install-command: npm install`, `vendor-sync-command: ''`, `version-bump-command: ''` | weekly | the `@jfs/vendor-cli` pin, the CLAUDE.md and (since vendor-cli 0.22.0) MAINTENANCE.md family blocks, the PR, the squash-merge | nothing, when it works | a red run on its own page, which vendor-cli's family liveness monitor has read every Monday since 2026-09-23. Before that, nothing: it failed twice here with no signal. |
+| `.github/dependabot.yml` + `.github/workflows/dependabot-merge.yml` (`workflow_run` on `Test` completed) | npm monthly, minor+patch grouped; `github-actions` monthly; both with a 7-day `cooldown` (version updates only, FAM-4) | every minor/patch bump, squash-merged on green | **every major**, and any PR body it cannot parse | a PR sits open. Nobody is told. #51 (jsdom 30.0.1) sat 13 days; the 2026-09-22 sweep superseded it. |
+| `.github/workflows/kit-pin-bump.yml` (`cron: '11 6 2 * *'`, the 2nd of each month, ~06:11 UTC — half an hour ahead of the consumers' bumps since 2026-10-01, see "The same-cron race") + dispatch, → `kit-pin-bump.yml@main` with `install-command: npm install`, `vendor-sync-command: ''`, `version-bump-command: ''` | monthly (weekly on Mondays until 2026-11-01) | the `@jfs/vendor-cli` pin, the CLAUDE.md and (since vendor-cli 0.22.0) MAINTENANCE.md family blocks, the PR, the squash-merge | nothing, when it works | a red run on its own page, which vendor-cli's family liveness monitor has read every Monday since 2026-09-23. Before that, nothing: it failed twice here with no signal. |
 | `.github/workflows/release.yml` (`workflow_run` on `Test` completed, `branches: [main]`) + dispatch | `Test` green on `main` | the `v<version>` tag and its GitHub release | nothing | **nothing.** A missing tag is visible only by comparing the tag list against `package.json`. |
 
 This repo's CI workflow is `test.yml`, not the `ci.yml` the apps use — as in
@@ -30,7 +31,7 @@ the three sibling kits, Art-Gallery- and vendor-cli, all of which also name it
 `workflows: [Test]`. That string must match the CI workflow's `name:` exactly
 or the trigger silently never fires, and it is genuinely inconsistent across
 the family: JFS-Sports' file is `test.yml` too but its workflow is named
-`Tests`. There is no deploy, no hosting, no cron beyond the Monday bump, and
+`Tests`. There is no deploy, no hosting, no cron beyond the monthly bump, and
 no `smoke.yml`-style prober anywhere in this repo. Two automations in the family
 open an issue when automation fails: market-monitor's smoke check, for its own
 endpoints, and — since 2026-09-23 — vendor-cli's family liveness monitor, which
@@ -123,7 +124,7 @@ puts **this file's** canonical block under exactly the same rule, so there are
 two synced blocks that a vendor-cli docs commit can turn red — as vendor-cli
 0.22.0 (#64) did to both on 2026-10-01, re-synced the same day with
 `jfs-claude-md-sync` and `jfs-maintenance-sync`. Neither is a bug to work
-around: re-sync and push. (Since 0.22.0 the Monday bump also re-syncs the
+around: re-sync and push. (Since 0.22.0 the monthly bump also re-syncs the
 MAINTENANCE.md block, so a canonical edit that lands before a bump is carried
 by it.)
 
@@ -225,8 +226,9 @@ for a week (two once #60 landed — the liveness monitor's 2026-10-01 report, ru
 just before vendor-cli 0.22.0, flags it; under 0.22.0's per-repo rule the same
 lag reads as "lagging", since both missing commits landed after Art-Gallery-'s
 last bump run). The race recurs whenever this repo bumps itself, so on
-2026-10-01 this repo's bump moved to `11 6 * * 1`, half an hour ahead of the
-consumers: a self-bump now lands before they resolve HEAD, and they pick it up
+2026-10-01 this repo's bump moved to 06:11, half an hour ahead of the
+consumers (and on 2026-11-01, with the whole family, to the 2nd of each month at
+that hour: `11 6 2 * *`): a self-bump now lands before they resolve HEAD, and they pick it up
 the same morning. The margin is not a guarantee — GitHub's start delay varies,
 and this repo's own August runs started 55 and 94 minutes late — so a miss is
 still possible, and it costs what it always did: a one-commit lag that the
@@ -235,7 +237,7 @@ consumers missed its 2026-09-28 bump by seconds) and records the earlier cron as
 its option.
 
 Weather and FlightCheck deliberately carry no pin at all — each retired it
-rather than keep a permanent pin, a drift-gate stage and a weekly bump PR for
+rather than keep a permanent pin, a drift-gate stage and a monthly bump PR for
 two helpers (Weather's `byId` / `elem`, FlightCheck's `byId` / `escapeHtml`),
 both now app-owned. Do not read their absence as drift.
 
@@ -278,7 +280,7 @@ paths.
 | **Six consumers' `--pick` lists name exports that exist** | `index.js` ↔ six other repos' package.json | **prose only.** All 25 distinct picked names resolve (re-checked 2026-09-22 against each consumer's `origin/main`). A removed or renamed export refuses loudly at the *consumer's* drift gate — but only on their next re-vendor |
 | `engines.node: ">=18"` | `package.json` ↔ nothing | **prose only, and unexercised.** The kits pass no `node-version-file` and have no `.nvmrc`, so CI rides family-ci's default Node 22. Nothing here has run on 18 in a long time. The *dev* floor is higher and separate: jsdom 30 needs `^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0` to run the DOM tests |
 | `release.yml` and `dependabot-merge.yml` follow the CI workflow by its exact `name:` | their `workflows: [Test]` ↔ `test.yml`'s `name: Test` | `test/repo.test.js`. A mismatch is silent in Actions: a `workflow_run` naming a workflow that does not exist never fires |
-| The Monday bump runs the whole gate | `kit-pin-bump.yml`'s `check-command` ↔ `test.yml`'s `run` | `test/repo.test.js` (the two lists must be identical; it failed on the old file, which lacked `npm run lint`) |
+| The monthly bump runs the whole gate | `kit-pin-bump.yml`'s `check-command` ↔ `test.yml`'s `run` | `test/repo.test.js` (the two lists must be identical; it failed on the old file, which lacked `npm run lint`) |
 | The shipped files reach only what a consumer installs | `bin/vendor.mjs`'s imports ↔ `dependencies` (never `devDependencies`); `index.js` ↔ no imports at all; `files` ships both | `test/repo.test.js` |
 | The rest of the README describes the current kit | `README.md` ↔ `index.js`, and ↔ the generator | **prose only.** Re-read on 2026-09-22 and corrected (see the run log) |
 | `parseFeed` stays linear on hostile input, so `MAX_FEED_BYTES` bounds its time as well as its memory (NWK-1) | the regex path and `stripTags` in `index.js` ↔ the 4 MB cap's promise | `test/parse.test.js`: six hostile shapes at 200–600 KB, each held under 1.5 s (5.8–14 s each on v0.13.3, under 80 ms now), plus a case pinning that the walks keep what the regexes matched |
@@ -336,7 +338,7 @@ is dependency-free by design and its suite is offline. What rots instead:
 Essentially none, and worth stating so a session does not look for it: no
 deploy, no hosting, no API key, no rate-limited upstream, no store, no billed
 egress. The only spend is GitHub Actions minutes — four short workflows, one
-weekly cron, runs measured in tens of seconds.
+monthly cron, runs measured in tens of seconds.
 
 The real exposure this repo carries is not financial. It is **blast radius**:
 one bad commit here becomes committed, unreviewed bundler output in six repos,
@@ -368,6 +370,7 @@ apps cite resolves to something:
 | **NWK-1** | FAM-9: `parseFeed`'s regex path goes quadratic on hostile feeds (the audit executed 400 KB → 34 s and put the 4 MB cap at about an hour) | **Fixed in v0.13.4** — #60, squash-merged as `72c93de` on 2026-10-01 (02:57 UTC) and tagged `v0.13.4` by `release.yml` (run #49). Every tag, CDATA and tag-strip scan is an `indexOf` walk. Re-measured on v0.13.3 before the fix, all five patterns the audit named are quadratic — the item, inner-tag and Atom-link open scans, the CDATA unwrap, and `stripTags` on a summary of bare `<` — at 5.8–14 s each for 200–600 KB. Under 80 ms each now, and under half a second at 4 MB. Gated by `test/parse.test.js`. The rewrite also fixed a Turkish capital İ shifting every later field. **Delivery:** committed in market-monitor since its #460 (2026-10-01); pending in the other five, John's News first (see 'What "delivered" means for a kit') |
 | FAM-7, river styles | Surf-Tracker keeps `style-src 'unsafe-inline'` for `ensureNewsRiverStyles`' `<style>` fallback; the audit's fix is "ship river CSS as a file" | **Open, and not a kit blocker.** The fallback runs only on engines without constructable stylesheets, where a strict CSP would simply block it. A consumer can serve the CSS from its own file today: `NEWS_RIVER_CSS` is exported, `renderNewsRiver` and `renderNewsRiverSkeletons` take `{ styles: false }`, and `ensureNewsRiverStyles` need not be called. Shipping a `.css` in this package would need a copy step in every consumer's vendoring, because the vendor CLI emits only the JS, so it waits on that design. `ensureSourceMenuStyles` has the same fallback and no opt-out |
 | FAM-1b | `main` here is not branch-protected | **Owner setting, pending.** PR #59 merged 4 s after it opened, before its `Test` run (which then failed with zero jobs, as above) had finished, so no required status check is enforced. Protecting `main` first needs a decision on how bump PRs satisfy a required check |
+| FAM-1(d) | `auto-merge: false` for the news-kit (and pwa-kit) bumps in the eight apps, since this kit ships the browser sanitizers | **Closed by owner decision, 2026-11-01: not taken.** Auto-merge stays on for the news-kit and pwa-kit bumps, so a change here still lands unread in every consumer on its monthly bump — the reason every sanitizer change needs its own tests here first |
 
 ## Deferred and stuck
 
@@ -481,7 +484,7 @@ Ordered by how fast each resolves, not by likelihood.
    and takes well under a minute after `npm install` (19 s on a loaded
    4-CPU container, 2026-09-22):
    `node --check index.js`, `npm run lint`, `npm run policy:check`, `npm test`.
-3. **Did the weekly bump run and succeed?** Check the run, not the branch —
+3. **Did the monthly bump run and succeed?** Check the run, not the branch —
    and remember `main`'s HEAD legitimately has no `Test` run after a bump, and
    the bump's PR legitimately has a zero-job red one (#129 on #58, #130 on #59:
    `pull_request` runs by `github-actions[bot]`, a second or so long).
@@ -520,6 +523,7 @@ Ordered by how fast each resolves, not by likelihood.
 
 | Date | Cadence | Found / done |
 | --- | --- | --- |
+| 2026-11-01 | Owner decisions | **Routine updates monthly** (the owner's family-wide decision of 2026-11-01): `dependabot.yml` npm weekly Tuesday → `interval: monthly` (cooldown 7 days kept; security updates unaffected); `kit-pin-bump.yml` from Mondays to `11 6 2 * *`, the 2nd of each month, still half an hour ahead of the consumers' 06:41; this file, CLAUDE.md, README and the `test/repo.test.js` test name follow. Family blocks re-synced from vendor-cli 0.22.1. **FAM-1(d) closed by owner decision**: auto-merge stays on for the news-kit and pwa-kit bumps. No version bump: nothing under `version-guard-paths` changed. |
 | 2026-10-01 | Docs pass + the bump's cron (after #60) | **Actions API, re-read:** `Dependabot merge` has 19 runs, 18 `skipped` — #17–#19 followed #60's three `Test` runs — so the decline-a-major path has run once (#15, on #57) and the minor/patch merge path is still unexercised; the counts above said 16 / 15. Every bump PR's zero-job red `Test` run (#101, #105, #119, #129, #130 — every bump PR since 2026-08-31) is now in the diagnosis ladder with the filter to use (branch `main`, events `push` / `workflow_dispatch`). **The same-cron race:** on 2026-09-28 Art-Gallery-'s bump resolved this repo's HEAD at about 07:12:34 UTC, seconds before #59 merged at 07:12:46, because every bump then fired on the same Monday 06:41 UTC cron; it has sat a commit behind since (two after #60). **Fix:** this repo's own `kit-pin-bump.yml` now runs at `11 6 * * 1`, half an hour ahead of the consumers, so a self-bump lands before they resolve HEAD; no test pins the cron, and every line here that quoted the old one now says the new one or describes the race. GitHub's start delay varies, so a miss is still possible and costs the same one-commit lag as before. **Delivery:** market-monitor already carries v0.13.4 — its monthly bump that morning (its #460) pinned `72c93de` — and the other five carry v0.13.3 until their next bump; NWK-1's row now names #60, `72c93de` and the `v0.13.4` tag. **Also current again:** the liveness monitor has watched since 2026-09-23 (its token), and since vendor-cli 0.22.0 it judges pins per consumer; the version guard covers dispatched runs since vendor-cli 0.21.8; the create-pull-request Node 20 warning is gone (vendor-cli #61); the sibling kits' bumps no longer fail on the create-PR setting. The leftover `claude/family-review-3urdej` (`3d86024`, fully merged) is recorded under "Documented but unresolved" as an owner cleanup. The CLAUDE.md and MAINTENANCE.md family blocks re-synced to vendor-cli 0.22.0 (`692b387`) with the sync bins; `.github/dependabot.yml` already carries the 7-day cooldown on both entries, so it is unchanged. **Gate:** `npm install`, `node --check`, lint, `policy:check` (2 regions), 214/214, kit-pin pre-flight, both sync checks, `maintenance-doc-check`, prod audit 0. No `index.js` or `bin` change, so no version bump. |
 | 2026-10-01 | Loose-ends pass (the family survey of 2026-09-23 → 09-30) | **Weekly, from the Actions API:** kit-pin bump #9 (2026-09-23, dispatch) and #10 (2026-09-28, scheduled) green; latest `Test` on `main` green (#128, `87c1224`), and `main`'s HEAD `51c3d60` (bot bump #59) has none, as expected; no open PR, no `auto/*` branch; the leftover `claude/family-review-3urdej` (at `3d86024`) is still on the remote. **Fixed (v0.13.4):** NWK-1 / FAM-9. The audit's quadratic `parseFeed` scans are `indexOf` walks now: the item, inner-tag and Atom-link open scans, the CDATA unwrap and `stripTags`. All five reproduced on v0.13.3 at 5.8–14 s for 200–600 KB, `stripTags` included, which the survey's verifier had not reproduced (it needs a long run of bare `<`). Now under 80 ms each, under 0.5 s at 4 MB. A 500,000-input differential fuzz against v0.13.3 matched on every input without U+0130 / U+212A. The rewrite also fixed a real misalignment: `block.toLowerCase()` turns İ into two units, so every field after one came back shifted ("İstanbul<", a link ending in "<"). Nine new tests (214); the six hostile ones fail on v0.13.3 and the İ case fails there too. README size table re-measured at vendor-cli 0.21.10: only the `parseFeed` rows moved (market-monitor 43,314, John's News 51,324, full surfaces 121,609 / 122,882), and v0.13.3 regenerated with 0.21.10 still matched every old row. **Docs:** the `dependabot-merge.yml` account (run #15 executed the job on #57 and declined a major; the minor/patch merge path is still untested); the zero-job red `Test` run every bump PR leaves; a new "Audit items filed against this kit" section, so the NWK-1 the apps cite resolves; delivery re-checked. **Config:** Dependabot `cooldown: default-days: 7` on both ecosystems (FAM-4), schedule unchanged. **Not done:** shipping the river CSS as a file (FAM-7). The route without it is recorded; a shipped file needs a consumer copy step, which is a vendor-cli design decision. **Delivery:** v0.13.4 reaches no consumer until each re-pins; John's News first. **Open, owner:** branch protection on `main` (FAM-1b) and the leftover branch. |
 | 2026-09-22 | Weekly + monthly sweep | **Weekly, from the Actions API:** kit-pin bump's last scheduled run (#8, 2026-09-21) green; latest `Test` on `main` green (#122, `39ffd45`); `Dependabot merge` 10 of 10 `skipped` — by the reusable job's own `if:` (a green `pull_request` run by `dependabot[bot]`), not by a name mismatch; no `auto/*` branch; one leftover `claude/family-review-3urdej` (at `3d86024`, already in `main`, no PR) for the owner to delete; the vendor-cli pin `bf9b859` is three commits behind HEAD `3e9e174`, none touching the generator, for Monday's bump; one bot PR, #51, 13 days old and red on a stale base. **Baseline gate on `main` clean** (lint, `policy:check` 2 regions, 200/200, doc check, both sync checks, prod audit 0, pin pre-flight). **Landed:** jsdom `^30.1.1` on this branch, superseding #51 (Dependabot closes it once `main` carries the version); 205/205 on 30.1.1; `engines.node` stays `>=18`. **Fixed:** the Monday bump's `check-command` lacked `npm run lint` while its comment claimed parity with `test.yml`; `prod-audit: true` in `test.yml`; new `test/repo.test.js` gates three cross-file rules (workflow_run names, check-command parity, shipped-dependency placement), mutation-tested (ten breaking edits each fail it; a quoted `'Test'` correctly passes); `test/escape-dedup.test.js` now pins every cell of the README guard table. README: the policy-marker claim retired at vendor-cli 0.20.0, "50-export" (48), the stranded seven-column row, the size tables re-measured at v0.13.3 / vendor-cli 0.21.6 (every consumer row byte-identical to that consumer's committed copy), a stale BearsMockDraft example, and Versioning (`release.yml` tags, not a human). CLAUDE.md's "~5 KB" escaper is 1.7 KB; `eslint.config.mjs` said C0/C1 where the regex is C0 + DEL; this file's tag command sorted as text and returned `v0.9.2`. **Delivery:** all six consumers carry v0.13.3 — JFS-Sports moved `1d8e9fc` → `39ffd45` via its #720 today. No upstream probe (this repo owns none). **Open:** retiring `isAnyModalOpen` (a minor bump and six re-vendors — a decision); a committed lockfile (reverses a standing choice); the consumer `--pick` invariant (needs sibling checkouts — vendor-cli's liveness monitor is the place); owner: `FAMILY_READ_TOKEN` (Vendor-cli #60) and the leftover branch. |
@@ -528,6 +532,7 @@ Ordered by how fast each resolves, not by likelihood.
 <!-- maintenance-check:allow
 .github/workflows/ci.yml     # named only to record that this repo has none: its CI workflow is test.yml, named `Test`
 .github/workflows/smoke.yml  # named only to record that no repo but market-monitor has one, so nothing here reports a failed cron
+11 6 * * 1                   # the Monday cron this repo's bump carried 2026-10-01 → 2026-11-01, quoted only in the run log; monthly since the owner's 2026-11-01 decision
 -->
 
 <!-- jfs-family-maintenance:start — managed by jfs-maintenance-sync; edit family/maintenance.md in @jfs/vendor-cli -->
@@ -551,7 +556,7 @@ A repo calls the ones that apply to it:
 | --- | --- | --- | --- |
 | `family-ci.yml` | every push, every PR, `workflow_dispatch` | — it *is* the gate | nothing |
 | `dependabot-merge.yml` | when CI completes on a Dependabot PR | every bump that is minor or patch, squash-merged on green — except a grouped version update of a direct production dependency (a security update, which arrives ungrouped, still lands) | **every major**, **every grouped npm version update bumping a direct production dependency**, and any PR it can't parse |
-| `kit-pin-bump.yml` | weekly, Mondays ~06:41 UTC — or the longer cadence a repo records in its half of this file | the `@jfs/*` pins, the re-vendor, the CLAUDE.md and MAINTENANCE.md family blocks, the version bump where the caller's command makes one | nothing, when it works |
+| `kit-pin-bump.yml` | monthly, on the 2nd ~06:41 UTC (news-kit ~06:11, ahead of its consumers) | the `@jfs/*` pins, the re-vendor, the CLAUDE.md and MAINTENANCE.md family blocks, the version bump where the caller's command makes one | nothing, when it works |
 | `release.yml` | CI green on `main` | the `v<version>` tag and its GitHub release | nothing |
 
 Three gaps follow from that table and they are the whole reason this protocol
@@ -625,8 +630,8 @@ protects every other cadence, and it asks four questions:
 3. **Are the `@jfs/*` pins actually current?** A pin that lacks a kit commit
    older than the repo's own last bump run is a bump that is not landing,
    whatever the workflow page says. A commit newer than that run is the
-   cadence — a repo that bumps monthly lags its kits for up to a month by
-   design. Compare against the run, not against hope.
+   cadence — the family bumps monthly, so a repo lags its kits for up to a
+   month by design. Compare against the run, not against hope.
 4. **Is any bot PR older than seven days, red, or conflicted?** A production
    dependency's minor/patch PR that `dependabot-merge.yml` left open is the
    week's work, not a hold: read each package's release notes and what changed

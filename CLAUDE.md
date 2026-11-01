@@ -100,7 +100,7 @@ the resolution from outside:
 ```
 
 The pin has long since moved past 0.12.0 (it tracks vendor-cli HEAD via
-the weekly bumper — don't restate the SHA here, it goes stale), so **that
+the monthly bumper — don't restate the SHA here, it goes stale), so **that
 `overrides` entry is dead
 weight once a consumer re-pins news-kit to this commit or later** — and
 every consumer has dropped it; don't let one back in. Verified from a
@@ -113,7 +113,7 @@ copy. `test/vendor.test.js` pins the narrowed-esm behavior so a pin
 regression fails CI here rather than in three consumers' `vendor:sync`.
 
 Because that pin decides what every consumer vendors, it gets the same
-weekly bumper the consumer repos run: `.github/workflows/kit-pin-bump.yml`
+monthly bumper the consumer repos run: `.github/workflows/kit-pin-bump.yml`
 (the family reusable workflow, `kit-pins:bump` → `jfs-bump-kit-pins`, which
 scans `dependencies` as well as `devDependencies`). There was no such
 workflow at first, which is how the pin sat at 0.13.0 while vendor-cli
@@ -271,20 +271,20 @@ worker that already activated has nothing to wait for and strands on
 
 ### Dependencies
 
-Every npm repo carries `.github/dependabot.yml` — npm weekly, or monthly
-where the repo's MAINTENANCE.md records why (a Netlify free plan, where every
-merge is a paid deploy); minor and patch grouped, any production
-dependencies in a group of their own; monthly `github-actions`; a 7-day
-`cooldown` — and calls the family's `dependabot-merge.yml` reusable
-workflow, which squash-merges a Dependabot PR once the repo's CI is green on
-it and every bump in it is minor or patch. It
-leaves open every MAJOR, and every grouped npm version update that bumps a
-direct production dependency: those run where the keys live and the suites
-fake the network, so a session reads each package's release notes and merges
-it by hand. A security update arrives ungrouped and still merges on green —
-which makes the grouping load-bearing. Dependabot never touches the `@jfs/*`
-git pins; the kit-pin bump owns those (weekly, or on the cadence the repo
-records). First-party `actions/*` are referenced by major tag; every other
+Every npm repo carries `.github/dependabot.yml` — npm and `github-actions`
+both monthly (the owner's decision of 2026-11-01: routine updates are
+monthly family-wide; security updates are not scheduled and still arrive
+when published); minor and patch grouped, any production dependencies in a
+group of their own; a 7-day `cooldown` — and calls the family's
+`dependabot-merge.yml` reusable workflow, which squash-merges a Dependabot
+PR once the repo's CI is green on it and every bump in it is minor or
+patch. It leaves open every MAJOR, and every grouped npm version update
+that bumps a direct production dependency: those run where the keys live
+and the suites fake the network, so a session reads each package's release
+notes and merges it by hand. A security update arrives ungrouped and still
+merges on green — which makes the grouping load-bearing. Dependabot never
+touches the `@jfs/*` git pins; the kit-pin bump owns those (monthly, on the
+2nd). First-party `actions/*` are referenced by major tag; every other
 action is pinned by full SHA.
 
 <!-- jfs-family-conventions:end -->
