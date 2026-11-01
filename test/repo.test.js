@@ -77,7 +77,7 @@ test('release.yml and dependabot-merge.yml follow the CI workflow by its exact n
   }
 });
 
-test("the Monday bump's check-command runs exactly the checks test.yml runs", () => {
+test("the monthly bump's check-command runs exactly the checks test.yml runs", () => {
   // The bump's merge is a GITHUB_TOKEN push, which fires no workflows, so
   // check-command is the ONLY validation a bump gets before it lands on main.
   // It omitted `npm run lint` while its own comment said "the same checks
