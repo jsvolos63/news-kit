@@ -141,6 +141,28 @@ Consumers therefore see a byte change on their next `vendor:sync`, so a
 re-vendor needs the usual site version bump; nothing they import changes
 behavior.
 
+## The CSS ships twice, and the parser's bound is held under a kill (0.14.0)
+
+`river.css` and `source-menu.css` are the exported `NEWS_RIVER_CSS` /
+`SOURCE_MENU_CSS`, byte for byte: edit the constant, run `npm run css:sync`,
+commit both. `npm run css:check` and `test/css-file.test.js` fail on any
+difference, and both files must stay in `package.json` `files`, or vendor-cli's
+`--format css` refuses them (an unlisted file is not in the installed package).
+They exist for one case, FAM-7: an engine without constructable stylesheets
+under a CSP with no `'unsafe-inline'`, where the installers' `<style>` fallback
+is refused. A page that links a copy marks it `data-news-kit="river"` /
+`"source-menu"`, and the installers then add nothing. Don't make the
+installers look for an unmarked link: a consumer's own stylesheet that happens
+to style `.nk-card` is not the kit's.
+
+`test/parse-hostile.test.js` runs nine hostile 4 MB bodies in a child process
+killed at 15 s. The in-process timing tests in `test/parse.test.js` stay, but
+alone they can only fail after a quadratic regression has finished, which at
+4 MB is about an hour of a blocked runner. Every shape after the first two sits
+in a CLOSED item: an unclosed `<item>` stops the outer walk before the inner
+scans run, so a shape that is not closed tests nothing (a first draft did
+exactly that and passed on v0.13.3).
+
 ## Lint
 
 `npm run lint` (ESLint flat config, `eslint.config.mjs`); CI runs it. This kit

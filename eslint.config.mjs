@@ -57,9 +57,9 @@ export default [
     rules,
   },
   {
-    // The vendoring shim and the suite: Node ESM. The tests build DOM
-    // fixtures, so they get the browser set too.
-    files: ['bin/**/*.mjs', 'test/**/*.mjs', 'test/**/*.js'],
+    // The vendoring shim, the dev tools and the suite: Node ESM. The tests
+    // build DOM fixtures, so they get the browser set too.
+    files: ['bin/**/*.mjs', 'tools/**/*.mjs', 'test/**/*.mjs', 'test/**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

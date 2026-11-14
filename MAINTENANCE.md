@@ -149,10 +149,10 @@ npm test
 
 All four are offline, and `kit-pin-bump.yml` passes the same four as its
 `check-command`. It used to omit `npm run lint`, on the theory that a
-vendor-cli pin bump cannot change `index.js`. But there is no lockfile, so the
-bump's `npm install` resolves eslint's floating range fresh, and a new eslint
-minor could redden lint while the bump merged green onto a `main` that then
-has no CI run. `test/repo.test.js` now fails when the two lists differ.
+vendor-cli pin bump cannot change `index.js`. But the bump re-resolves the
+tree (`npm install --ignore-scripts` rewrites the lockfile after the pin moves),
+and a new eslint minor could redden lint while the bump merged green onto a
+`main` that then has no CI run. `test/repo.test.js` now fails when the two lists differ.
 What else a bump could break that `check-command` cannot see is the
 family-ci-only half below; the conventions block is re-synced by the bump
 itself.
@@ -176,9 +176,11 @@ nothing; it *is* the thing vendored — so family-ci's vendor-script-parity step
 prints `scripts absent - skipped`. It passes `prod-audit: true` (since
 2026-09-22), like the other three kits: the one production dependency,
 `@jfs/vendor-cli`, pulls `esbuild` in behind it and is real production surface
-*for every consumer that installs this package*. There is no committed
-lockfile, so the audit reads the one `npm install` writes into the workspace.
-It reported 0 vulnerabilities on 2026-09-22 and again on 2026-10-01.
+*for every consumer that installs this package*. Since 2026-11-14 the lockfile
+is committed and CI installs it with `npm ci --ignore-scripts`, so the audit
+reads exactly the tree that was reviewed; `audit: true` and
+`audit-signatures: true` add the whole tree and the registry's signatures. It
+reported 0 vulnerabilities on 2026-09-22, 2026-10-01 and 2026-11-14.
 
 ## What "delivered" means for a kit
 
@@ -312,11 +314,6 @@ is dependency-free by design and its suite is offline. What rots instead:
 - **The canonical sanitizer policy in vendor-cli.** An edit there reddens
   `npm run policy:check` here on the next CI run with no commit in this repo.
   Loud, but it fails in the middle of unrelated work.
-- **Floating devDependency ranges.** `package-lock.json` is gitignored, so
-  every CI run resolves `eslint ^10.9.1`, `@eslint/js ^10.0.1`, `globals
-  ^17.11.0` and `jsdom ^30.1.1` fresh. A new eslint minor that adds a rule to
-  `js.configs.recommended` can redden this repo with no change here and no
-  Dependabot PR to point at. Loud, and confusing the first time.
 - **`bin/vendor.mjs`'s resolution promise.** It runs whatever vendor-cli
   resolves *from inside this package*, which is why the pin is in
   `dependencies` and not `devDependencies` — a consumer installs the former and
@@ -402,14 +399,6 @@ Documented but unresolved:
   retirement candidate would come from. The bar this repo already set:
   `sanitizeUrl` / `sanitizeHref` went back to their single consumer in v0.13.0
   only once both "no internal caller" and "exactly one importer" held.
-- **No committed lockfile.** The three sibling kits commit `package-lock.json`,
-  so their devDependencies resolve the same way on every run; this repo and
-  vendor-cli gitignore it, so every run resolves the floating ranges fresh (see
-  "What nothing watches"). Adopting one means changing
-  `install-command` in `test.yml` and `vendor-sync-command` in
-  `kit-pin-bump.yml` together (so the lockfile follows the bumped pin). It is
-  recorded rather than done because it reverses a standing choice here; the
-  lint half of the risk is covered by the bump now running lint.
 - **The consumer `--pick` invariant is still prose.** Mechanizing it needs the
   six sibling repos checked out beside this one, which CI does not have. It
   belongs in vendor-cli's family liveness monitor, which already reads every
@@ -428,14 +417,17 @@ Documented but unresolved:
   into every narrowed build regardless of the pick list — and `classify`
   *executed* on page load in copies that pick none of the classifier. Measured
   on Art-Gallery-'s real four-export list: 7,688 → 6,255 bytes.
-- **`vendor-sync-command: ''` and `version-bump-command: ''`** in
-  `kit-pin-bump.yml`. Left at their defaults the run dies on
+- **`vendor-sync-command: npm install --ignore-scripts` and
+  `version-bump-command: ''`** in `kit-pin-bump.yml`. The first rewrites the
+  committed lockfile after the bump moves the vendor-cli pin (it was `''`
+  while there was no lockfile). Left at their defaults the run dies on
   `Missing script: "vendor:sync"`, which is what happened to pwa-kit,
   netlify-kit and fetch-kit on every scheduled run for two weeks before their
   callers were corrected (they then failed for a different reason — the
   create-PR repository setting — until it was turned on there by 2026-09-23).
-  `install-command: npm install` is the third of the trio: there is no
-  lockfile for `npm ci` to read.
+  `install-command: npm ci --ignore-scripts` is the third of the trio: it
+  installs exactly the committed lockfile, and no package's install script runs
+  in a job that resolves kit commits nobody has reviewed yet.
 - **`dependencies`, not `devDependencies`, for the vendor-cli pin.** See above:
   the shim resolves from inside this package, and a consumer gets dependencies
   only.
@@ -523,6 +515,7 @@ Ordered by how fast each resolves, not by likelihood.
 
 | Date | Cadence | Found / done |
 | --- | --- | --- |
+| 2026-11-14 | Family security hardening, wave 2, one PR, **minor bump 0.13.4 → 0.14.0** | **FAM-9 re-measured, then held under a hard kill; FAM-7's CSS file; FAM-11's lockfile.** (1) Nine hostile 4 MB shapes timed on 0.13.4: every one parses in under 40 ms, so NWK-1's fix holds. The in-process timing tests could only fail after a regression finished, which at 4 MB is about an hour, so `test/parse-hostile.test.js` now runs each shape in a child killed at 15 s. Against v0.13.3, the last quadratic release, 7 of the 9 are killed; the well-formed items and the near-miss tags never were quadratic. (2) `river.css` and `source-menu.css` ship beside `index.js`, held byte-identical to `NEWS_RIVER_CSS` / `SOURCE_MENU_CSS` by `npm run css:check` (`tools/css-sync.mjs`). The installers add nothing when the page links a copy marked `data-news-kit="river"` / `"source-menu"`. Consumers vendor the files with vendor-cli 0.24.0's `--format css` (its #87), so the `@jfs/vendor-cli` pin moves `dac4918` → `f71f171` (0.24.0). (3) `package-lock.json` is committed and both workflows install it with `npm ci --ignore-scripts`; the bump refreshes it with `npm install --ignore-scripts`; `test.yml` adds `audit` and `audit-signatures`; both workflows grant nothing at the top level. **Proof:** the CSS tests fail on 0.13.4 (3 of 3); 226/226; lint; `policy:check`; `npm audit` 0; signatures verified. The installer change touches every narrowed consumer copy that picks `ensureNewsRiverStyles` or `ensureSourceMenuStyles`, so those re-vendors carry a site version bump. |
 | 2026-11-13 | Family security hardening, wave 1 (FAM-2), one PR, no version bump | **Every `uses:` of jsvolos63/vendor-cli pinned to a release's commit (`@df716ce… # v0.23.0`), never `@main`.** vendor-cli 0.23.0 (its #86) made the pin meaningful: its reusable workflows check their own tooling out at the commit they were called at (`job.workflow_sha`, GitHub's record of the call) and the kit-pin bump calls `land-bot-pr` from that checkout, so a pinned `uses:` no longer runs main's code for its tooling or its write job. Dependabot's monthly `github-actions` entry rolls the pin (7-day cooldown); a canonical-text edit in vendor-cli now reaches this repo when the pin rolls, and that Dependabot PR is red until the CLAUDE.md / MAINTENANCE.md block is re-synced (vendor-cli's CLAUDE.md, "Family CI"). Workflow and docs only: no shipped file changed, so no version bump, and the deploy-ignore step skips it where the repo has one. |
 | 2026-11-01 | Owner decisions | **Routine updates monthly** (the owner's family-wide decision of 2026-11-01): `dependabot.yml` npm weekly Tuesday → `interval: monthly` (cooldown 7 days kept; security updates unaffected); `kit-pin-bump.yml` from Mondays to `11 6 2 * *`, the 2nd of each month, still half an hour ahead of the consumers' 06:41; this file, CLAUDE.md, README and the `test/repo.test.js` test name follow. Family blocks re-synced from vendor-cli 0.22.1. **FAM-1(d) closed by owner decision**: auto-merge stays on for the news-kit and pwa-kit bumps. No version bump: nothing under `version-guard-paths` changed. |
 | 2026-10-01 | Docs pass + the bump's cron (after #60) | **Actions API, re-read:** `Dependabot merge` has 19 runs, 18 `skipped` — #17–#19 followed #60's three `Test` runs — so the decline-a-major path has run once (#15, on #57) and the minor/patch merge path is still unexercised; the counts above said 16 / 15. Every bump PR's zero-job red `Test` run (#101, #105, #119, #129, #130 — every bump PR since 2026-08-31) is now in the diagnosis ladder with the filter to use (branch `main`, events `push` / `workflow_dispatch`). **The same-cron race:** on 2026-09-28 Art-Gallery-'s bump resolved this repo's HEAD at about 07:12:34 UTC, seconds before #59 merged at 07:12:46, because every bump then fired on the same Monday 06:41 UTC cron; it has sat a commit behind since (two after #60). **Fix:** this repo's own `kit-pin-bump.yml` now runs at `11 6 * * 1`, half an hour ahead of the consumers, so a self-bump lands before they resolve HEAD; no test pins the cron, and every line here that quoted the old one now says the new one or describes the race. GitHub's start delay varies, so a miss is still possible and costs the same one-commit lag as before. **Delivery:** market-monitor already carries v0.13.4 — its monthly bump that morning (its #460) pinned `72c93de` — and the other five carry v0.13.3 until their next bump; NWK-1's row now names #60, `72c93de` and the `v0.13.4` tag. **Also current again:** the liveness monitor has watched since 2026-09-23 (its token), and since vendor-cli 0.22.0 it judges pins per consumer; the version guard covers dispatched runs since vendor-cli 0.21.8; the create-pull-request Node 20 warning is gone (vendor-cli #61); the sibling kits' bumps no longer fail on the create-PR setting. The leftover `claude/family-review-3urdej` (`3d86024`, fully merged) is recorded under "Documented but unresolved" as an owner cleanup. The CLAUDE.md and MAINTENANCE.md family blocks re-synced to vendor-cli 0.22.0 (`692b387`) with the sync bins; `.github/dependabot.yml` already carries the 7-day cooldown on both entries, so it is unchanged. **Gate:** `npm install`, `node --check`, lint, `policy:check` (2 regions), 214/214, kit-pin pre-flight, both sync checks, `maintenance-doc-check`, prod audit 0. No `index.js` or `bin` change, so no version bump. |
