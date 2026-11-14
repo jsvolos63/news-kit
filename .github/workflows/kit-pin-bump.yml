@@ -25,13 +25,14 @@ on:
     - cron: '11 6 2 * *'   # the 2nd of each month, ~06:11 UTC, before the consumers' ~06:41
   workflow_dispatch:
 
-permissions:
-  contents: write        # the caller must grant all three — a called
-  pull-requests: write   # workflow can't elevate its token
-  actions: write         # dispatch the repo's CI on the bump branch
+permissions: {}           # nothing by default; the job asks for its own
 
 jobs:
   bump:
+    permissions:
+      contents: write        # the caller must grant all three — a called
+      pull-requests: write   # workflow can't elevate its token
+      actions: write         # dispatch the repo's CI on the bump branch
     uses: jsvolos63/vendor-cli/.github/workflows/kit-pin-bump.yml@df716ce2579aadc773215f87a184f2636283088d # v0.23.0
     # The family GitHub App's two secrets, by name (never `secrets: inherit`).
     # With both, the bump PR is opened and merged as the App, the one identity
@@ -42,10 +43,11 @@ jobs:
       FAMILY_BOT_APP_ID: ${{ secrets.FAMILY_BOT_APP_ID }}
       FAMILY_BOT_PRIVATE_KEY: ${{ secrets.FAMILY_BOT_PRIVATE_KEY }}
     with:
-      # No lockfile in this repo (the one dependency is a github pin), so
-      # `npm ci` has nothing to read.
-      install-command: npm install
-      vendor-sync-command: ''
+      # The lockfile is committed (FAM-11): install exactly it, then let
+      # `npm install` rewrite it after the bump moves the @jfs/vendor-cli pin.
+      # No vendor:sync here — this kit vendors nothing.
+      install-command: npm ci --ignore-scripts
+      vendor-sync-command: npm install --ignore-scripts
       version-bump-command: ''
       # EXACTLY the checks test.yml runs — test/repo.test.js fails when
       # the two blocks differ. The bump's merge is a GITHUB_TOKEN push, which

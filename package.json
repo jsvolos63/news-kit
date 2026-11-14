@@ -1,6 +1,6 @@
 {
   "name": "@jfs/news-kit",
-  "version": "0.13.4",
+  "version": "0.14.0",
   "description": "Shared, dependency-free news + DOM primitives (RSS parsing, dedupe, classification, HTML escaping, URL guards, whitelist HTML sanitizers, an auto-escaping element builder, relative time, news-river rendering, source-menu, and accessible modal plumbing) extracted from the JFS family of apps. Absorbs @jfs/dom-kit and @jfs/modal-kit.",
   "type": "module",
   "license": "MIT",
@@ -40,17 +40,21 @@
   },
   "files": [
     "index.js",
-    "bin"
+    "bin",
+    "river.css",
+    "source-menu.css"
   ],
   "scripts": {
     "test": "node --test",
     "lint": "eslint .",
     "policy:sync": "jfs-sanitizer-policy-sync index.js",
     "policy:check": "jfs-sanitizer-policy-sync --check index.js",
-    "kit-pins:bump": "jfs-bump-kit-pins"
+    "kit-pins:bump": "jfs-bump-kit-pins",
+    "css:sync": "node tools/css-sync.mjs",
+    "css:check": "node tools/css-sync.mjs --check"
   },
   "dependencies": {
-    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#dac49184f6833dbf140a82995a89d0447cf1a2ff"
+    "@jfs/vendor-cli": "github:jsvolos63/vendor-cli#f71f1713e7adafd83598d153e93d6e58cfa6375f"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

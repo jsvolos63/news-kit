@@ -1197,13 +1197,30 @@ export const NEWS_RIVER_CSS = `
 // query, so it also works before <head> exists).
 const RIVER_STYLE_FLAG = '__jfsNewsRiverStyles';
 
-/** Install NEWS_RIVER_CSS into `doc` exactly once. Constructed stylesheet
- *  first (CSP-safe under style-src without 'unsafe-inline'); <style> tag
- *  fallback for engines without adoptedStyleSheets. */
+// A page that links the kit's own stylesheet (river.css / source-menu.css,
+// vendored with `--format css`, 0.14.0) marks the <link> with
+// `data-news-kit="river"` / `"source-menu"`; the installers then add nothing.
+// That is the only way to style these components under `style-src 'self'` on
+// an engine without constructable stylesheets (Safari before 16.4), where the
+// <style> fallback is refused (FAM-7) — and it keeps a page from carrying the
+// same rules twice.
+function linkedKitSheet(doc, token) {
+  try {
+    return Boolean(doc.querySelector && doc.querySelector(`link[rel~="stylesheet"][data-news-kit~="${token}"]`));
+  } catch {
+    return false;
+  }
+}
+
+/** Install NEWS_RIVER_CSS into `doc` exactly once. Nothing when the page links
+ *  river.css (`<link rel="stylesheet" data-news-kit="river" …>`); otherwise a
+ *  constructed stylesheet first (CSP-safe under style-src without
+ *  'unsafe-inline'), a <style> tag for engines without adoptedStyleSheets. */
 export function ensureNewsRiverStyles(doc = globalThis.document) {
   if (!doc) throw new Error('ensureNewsRiverStyles requires a DOM (browser).');
   if (doc[RIVER_STYLE_FLAG]) return;
   doc[RIVER_STYLE_FLAG] = true;
+  if (linkedKitSheet(doc, 'river')) return;
   try {
     const Sheet = (doc.defaultView || globalThis).CSSStyleSheet;
     const sheet = new Sheet();
@@ -1694,12 +1711,14 @@ export const SOURCE_MENU_CSS = `
 
 const SOURCE_MENU_STYLE_FLAG = '__jfsNewsSourceMenuStyles';
 
-/** Install SOURCE_MENU_CSS into `doc` exactly once (same CSP-safe strategy
- *  as ensureNewsRiverStyles: constructed stylesheet, <style> fallback). */
+/** Install SOURCE_MENU_CSS into `doc` exactly once (same strategy as
+ *  ensureNewsRiverStyles: nothing when the page links source-menu.css with
+ *  `data-news-kit="source-menu"`, else a constructed stylesheet, else <style>). */
 export function ensureSourceMenuStyles(doc = globalThis.document) {
   if (!doc) throw new Error('ensureSourceMenuStyles requires a DOM (browser).');
   if (doc[SOURCE_MENU_STYLE_FLAG]) return;
   doc[SOURCE_MENU_STYLE_FLAG] = true;
+  if (linkedKitSheet(doc, 'source-menu')) return;
   try {
     const Sheet = (doc.defaultView || globalThis).CSSStyleSheet;
     const sheet = new Sheet();

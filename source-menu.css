@@ -1,0 +1,89 @@
+
+:where(.nk-sources, .nk-source-btn) {
+  --nk-ink: #14171a;
+  --nk-muted: #5b6570;
+  --nk-line: #e3e7eb;
+  --nk-link: #0b5cad;
+  --nk-chip: #eef1f4;
+}
+@media (prefers-color-scheme: dark) {
+  :where(.nk-sources, .nk-source-btn) {
+    --nk-ink: #e8ebee;
+    --nk-muted: #9aa4ad;
+    --nk-line: #262c31;
+    --nk-link: #5aa9f5;
+    --nk-chip: #20262b;
+  }
+}
+.nk-sources { color: var(--nk-ink); }
+.nk-sources-heading {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--nk-muted);
+  margin: 0 0 6px;
+}
+.nk-source-all {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 4px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--nk-line);
+  font: inherit;
+  color: var(--nk-ink);
+  cursor: pointer;
+  text-align: left;
+}
+.nk-source-all[aria-pressed="true"] .nk-source-name { color: var(--nk-link); font-weight: 700; }
+.nk-source-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-bottom: 1px solid var(--nk-line);
+}
+.nk-source-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 13px 4px;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--nk-ink);
+  cursor: pointer;
+  text-align: left;
+}
+.nk-source-link:disabled { cursor: default; opacity: 0.45; }
+.nk-source-link .nk-source-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* reads as a hyperlink: accent color, deliberately no underline */
+  color: var(--nk-link);
+}
+.nk-source-count {
+  opacity: 0.65;
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.nk-source-go { margin-left: auto; opacity: 0.45; font-size: 18px; }
+.nk-source-row--active .nk-source-name { font-weight: 700; }
+.nk-source-row--active .nk-source-go { opacity: 0.9; color: var(--nk-link); }
+.nk-source-check { display: flex; align-items: center; padding: 0 6px 0 12px; cursor: pointer; }
+.nk-source-checkbox { width: 20px; height: 20px; accent-color: var(--nk-link); cursor: pointer; }
+.nk-source-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.nk-source-btn .nk-source-caret { opacity: 0.6; font-size: 11px; }
